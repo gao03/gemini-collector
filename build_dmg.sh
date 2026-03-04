@@ -103,6 +103,11 @@ ARCH="$(uname -m)"
 DMG_NAME="${APP_NAME}_${VERSION}_${ARCH}.dmg"
 DMG_PATH="$RELEASE_DIR/$DMG_NAME"
 
+# ad-hoc 签名，避免 macOS 报 "damaged" 错误
+codesign --force --deep --sign - "$APP_PATH" 2>/dev/null && \
+    echo "      ad-hoc 签名完成" || \
+    echo "      签名跳过（codesign 不可用）"
+
 TMP_DMG_DIR="$(mktemp -d)"
 cp -r "$APP_PATH" "$TMP_DMG_DIR/"
 ln -s /Applications "$TMP_DMG_DIR/Applications"
