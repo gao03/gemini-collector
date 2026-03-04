@@ -76,7 +76,12 @@ macOS 原生应用 · 支持多账号 · 亮色 / 暗色主题
 | macOS | ✅ 已支持 | 从 [Releases](https://github.com/FirenzeLor/gemini-collector/releases) 下载最新 `.dmg`，拖入 Applications 即可 |
 | Windows | 🚧 待支持 | 计划中 |
 
-> macOS 首次打开时若提示"无法验证开发者"，前往 **系统设置 → 隐私与安全性** 点击"仍要打开"即可。
+> **macOS 首次打开提示"无法验证开发者"**：前往 **系统设置 → 隐私与安全性** 点击"仍要打开"即可。
+>
+> **提示"已损坏"**：在终端执行以下命令后重新打开：
+> ```bash
+> xattr -cr /Applications/gemini-collector.app
+> ```
 
 ---
 
