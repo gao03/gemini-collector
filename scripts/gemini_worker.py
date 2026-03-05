@@ -454,6 +454,9 @@ class GeminiWorker:
                 self._emit_job_state(sub_job, "done", phase=phase, progress={"current": idx, "total": total})
                 succeeded.append(cid)
             except Exception as exc:
+                cancelled_cls = self._sync_cancelled_error_cls
+                if isinstance(exc, JobCancelledError) or (cancelled_cls and isinstance(exc, cancelled_cls)):
+                    raise
                 self._emit_job_state(
                     sub_job,
                     "failed",
