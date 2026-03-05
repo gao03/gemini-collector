@@ -91,10 +91,14 @@ async function computeImageDHash(url: string, size = 8): Promise<number[] | null
 
 // Fix CommonMark bold/italic parsing failure when ** is adjacent to CJK/Unicode chars.
 // Inserts zero-width space (U+200B) between non-ASCII characters and * markers.
+// Also escapes $ followed by digits (currency) to prevent remarkMath misinterpretation.
 function fixMarkdown(content: string): string {
   return content
     // Strip Gemini internal iemoji: markers, keep the code value
     .replace(/iemoji:([^:\s)]{1,20})/g, "$1")
+    // Escape currency $ (e.g. $300) so remarkMath doesn't treat them as math delimiters.
+    // Negative lookbehind (?<!\$) avoids escaping the second $ in $$...$$ display math blocks.
+    .replace(/(?<!\$)\$(\d)/g, "\\$$1")
     .replace(/([^\x00-\x7F])(\*+)/g, "$1\u200B$2")
     .replace(/(\*+)([^\x00-\x7F])/g, "$1\u200B$2");
 }
