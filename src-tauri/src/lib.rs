@@ -1596,6 +1596,24 @@ fn enqueue_job(req: EnqueueJobRequest) -> Result<String, String> {
     worker_host::enqueue_job(req)
 }
 
+#[tauri::command]
+fn cancel_job(
+    app: tauri::AppHandle,
+    account_id: Option<String>,
+    #[allow(non_snake_case)] accountId: Option<String>,
+) -> Result<(), String> {
+    let account_id = resolve_account_id_arg(account_id, accountId)?;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let flag_path = data_dir
+        .join("accounts")
+        .join(&account_id)
+        .join(".cancel_requested");
+    if !flag_path.parent().map(|p| p.exists()).unwrap_or(false) {
+        return Err(format!("账号目录不存在: {}", account_id));
+    }
+    std::fs::write(&flag_path, b"").map_err(|e| format!("写入取消标志失败: {}", e))
+}
+
 /// Read `accounts/{id}/conversations.json` and return the `items` array as JSON string.
 #[tauri::command]
 fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Result<String, String> {
@@ -1839,6 +1857,7 @@ pub fn run() {
             load_accounts,
             run_accounts_import,
             enqueue_job,
+            cancel_job,
             get_account_export_stats,
             get_account_range_bytes,
             export_account_zip,

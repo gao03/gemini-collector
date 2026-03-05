@@ -89,6 +89,14 @@ OUTPUT_DIR = Path("gemini_export_output")
 
 
 # ============================================================================
+# 取消异常
+# ============================================================================
+class SyncCancelledError(Exception):
+    """用户主动取消同步任务时抛出。"""
+    pass
+
+
+# ============================================================================
 # 主导出类
 # ============================================================================
 class GeminiExporter:
@@ -993,7 +1001,7 @@ class GeminiExporter:
     # ------------------------------------------------------------------
     # 主导出流程
     # ------------------------------------------------------------------
-    def export_list_only(self, output_dir=None, stop_on_unchanged: bool = False):
+    def export_list_only(self, output_dir=None, stop_on_unchanged: bool = False, cancel_check=None):
         """
         仅同步会话列表（分页），不拉取对话详情。
         规则：
@@ -1217,6 +1225,10 @@ class GeminiExporter:
             result = _persist_state(phase, next_cursor, None)
             print(f"  第 {page} 页: {len(chats)} 个对话 (累计 {result['remoteCount']})")
 
+            if cancel_check and cancel_check():
+                print("[*] 列表同步：检测到取消请求，已中断")
+                raise SyncCancelledError("用户取消列表同步")
+
             if not next_cursor:
                 if result["lostCount"] > 0:
                     print(f"  [lost] 标记已丢失会话: {result['lostCount']} 个")
@@ -1227,7 +1239,7 @@ class GeminiExporter:
 
         return {"updatedIds": updated_ids}
 
-    def sync_single_conversation(self, conversation_id, output_dir=None):
+    def sync_single_conversation(self, conversation_id, output_dir=None, cancel_check=None):
         """
         同步单个会话详情（含媒体），并更新该账号本地索引。
 
@@ -1499,6 +1511,8 @@ class GeminiExporter:
                     error_message=None,
                 )
                 _persist_progress_summary(len(raw_turns))
+                if cancel_check and cancel_check():
+                    raise SyncCancelledError("用户取消单会话同步（分页阶段）")
                 page_ms = (time.perf_counter() - page_start) * 1000
                 print(f"  第 {fetched_pages} 页: {len(page_turns)} 轮 (累计 {len(raw_turns)}) {page_ms:.0f}ms")
 
@@ -1591,6 +1605,8 @@ class GeminiExporter:
                 failed_map = {item["media_id"]: (item.get("error") or "download_failed") for item in failed_items}
                 recovered_ids = batch_media_ids - set(failed_map.keys())
                 flag_stats = _update_jsonl_media_failure_flags(jsonl_file, failed_map, recovered_ids)
+                if cancel_check and cancel_check():
+                    raise SyncCancelledError("用户取消单会话同步（媒体阶段）")
                 if flag_stats["marked"] > 0 or flag_stats["cleared"] > 0:
                     print(
                         "  [media-flag] 已更新附件下载标记:"
@@ -1690,6 +1706,8 @@ class GeminiExporter:
             failed_map = {item["media_id"]: (item.get("error") or "download_failed") for item in failed_items}
             recovered_ids = batch_media_ids - set(failed_map.keys())
             flag_stats = _update_jsonl_media_failure_flags(jsonl_file, failed_map, recovered_ids)
+            if cancel_check and cancel_check():
+                raise SyncCancelledError("用户取消单会话同步（媒体阶段）")
             if flag_stats["marked"] > 0 or flag_stats["cleared"] > 0:
                 print(
                     "  [media-flag] 已更新附件下载标记:"
