@@ -29,6 +29,8 @@ interface SidebarProps {
   onSyncConversation?: (id: string) => Promise<void> | void;
   syncingConversationIds?: string[];
   onDeleteConversation?: (convId: string) => void;
+  onCancelList?: () => void;
+  onCancelFull?: () => void;
 }
 
 function formatConvTime(iso: string): string {
@@ -57,9 +59,12 @@ export function Sidebar({
   disableAccountSwitch = false, disableConversationSync = false,
   onSyncConversation, syncingConversationIds = [],
   onDeleteConversation,
+  onCancelList,
+  onCancelFull,
 }: SidebarProps) {
   const t = useTheme();
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [cancelConfirm, setCancelConfirm] = useState<"list" | "full" | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; convId: string } | null>(null);
   const syncingSet = new Set(syncingConversationIds);
   const otherAccounts = accounts.filter((a) => a.id !== currentAccount.id);
@@ -321,6 +326,7 @@ export function Sidebar({
         )}
 
         <div style={{
+          position: "relative",
           borderRadius: 10,
           background: showSwitcher ? t.hover : "transparent",
           transition: "background 0.12s",
@@ -329,6 +335,59 @@ export function Sidebar({
           gap: 6,
           padding: "10px 10px",
         }}>
+          {cancelConfirm && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "100%",
+                left: 0,
+                right: 0,
+                marginBottom: 4,
+                borderRadius: 10,
+                background: t.cardBg,
+                border: `1px solid ${t.divider}`,
+                backdropFilter: "blur(28px) saturate(115%)",
+                WebkitBackdropFilter: "blur(28px) saturate(115%)",
+                boxShadow: t.isDark
+                  ? "0 -6px 18px rgba(3,8,18,0.5)"
+                  : "0 -6px 18px rgba(80,104,146,0.18)",
+                padding: "10px 12px",
+                zIndex: 200,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontSize: 12, color: t.text, marginBottom: 8 }}>
+                {cancelConfirm === "list" ? "终止列表同步？" : "终止完全同步？"}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCancelConfirm(null);
+                    cancelConfirm === "list" ? onCancelList?.() : onCancelFull?.();
+                  }}
+                  style={{
+                    flex: 1, height: 26, borderRadius: 6, border: "none",
+                    background: "#ef4444", color: "#fff",
+                    fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  终止任务
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setCancelConfirm(null); }}
+                  style={{
+                    flex: 1, height: 26, borderRadius: 6,
+                    border: `1px solid ${t.divider}`,
+                    background: "transparent", color: t.text,
+                    fontSize: 12, cursor: "pointer",
+                  }}
+                >
+                  继续同步
+                </button>
+              </div>
+            </div>
+          )}
           <div style={{ width: 28, height: 28, borderRadius: "50%", background: currentAccount.avatarColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
             {currentAccount.avatarText}
           </div>
@@ -339,14 +398,21 @@ export function Sidebar({
             {currentAccount.listSyncPending && <PendingDot />}
           </div>
           <button
-            onClick={(e) => { e.stopPropagation(); if (!listSyncing && !fullSyncing) onSyncList(); }}
-            title="同步列表"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (listSyncing) {
+                setCancelConfirm(prev => prev === "list" ? null : "list");
+                return;
+              }
+              if (!fullSyncing) onSyncList();
+            }}
+            title={listSyncing ? "点击终止列表同步" : "同步列表"}
             style={{
               height: 22,
               borderRadius: 6,
               border: "none",
               background: "transparent",
-              cursor: (listSyncing || fullSyncing) ? "default" : "pointer",
+              cursor: (listSyncing || !fullSyncing) ? "pointer" : "default",
               display: "flex",
               alignItems: "center",
               gap: 4,
@@ -358,7 +424,7 @@ export function Sidebar({
             }}
             onMouseEnter={(e) => {
               e.stopPropagation();
-              if (!listSyncing && !fullSyncing) (e.currentTarget as HTMLElement).style.background = t.btnHoverBg;
+              if (listSyncing || !fullSyncing) (e.currentTarget as HTMLElement).style.background = t.btnHoverBg;
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLElement).style.background = "transparent";
@@ -368,14 +434,21 @@ export function Sidebar({
             <SyncIcon spinning={listSyncing} color={listSyncing ? "#0071e3" : t.textSub} small />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); if (!fullSyncing && !listSyncing) onSyncFull(); }}
-            title="完全同步（先列表后逐会话）"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (fullSyncing) {
+                setCancelConfirm(prev => prev === "full" ? null : "full");
+                return;
+              }
+              if (!listSyncing) onSyncFull();
+            }}
+            title={fullSyncing ? "点击终止完全同步" : "完全同步（先列表后逐会话）"}
             style={{
               height: 22,
               borderRadius: 6,
               border: "none",
               background: "transparent",
-              cursor: (fullSyncing || listSyncing) ? "default" : "pointer",
+              cursor: (fullSyncing || !listSyncing) ? "pointer" : "default",
               display: "flex",
               alignItems: "center",
               gap: 4,
@@ -387,7 +460,7 @@ export function Sidebar({
             }}
             onMouseEnter={(e) => {
               e.stopPropagation();
-              if (!fullSyncing && !listSyncing) (e.currentTarget as HTMLElement).style.background = t.btnHoverBg;
+              if (fullSyncing || !listSyncing) (e.currentTarget as HTMLElement).style.background = t.btnHoverBg;
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLElement).style.background = "transparent";

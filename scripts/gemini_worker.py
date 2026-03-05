@@ -32,6 +32,11 @@ JOB_TYPES = {
 }
 
 
+class JobCancelledError(Exception):
+    """用户主动取消任务时抛出。"""
+    pass
+
+
 def now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -53,8 +58,11 @@ class GeminiWorker:
 
         self._account_map: Dict[str, Any] = {}
 
+        self._sync_cancelled_error_cls: Optional[type[BaseException]] = None
+
         self._worker_thread = threading.Thread(target=self._job_loop, daemon=True)
         self._worker_thread.start()
+        self._cleanup_stale_cancel_flags()
 
     def _send_line(self, payload: Dict[str, Any]) -> None:
         text = json.dumps(payload, ensure_ascii=False)
@@ -134,6 +142,7 @@ class GeminiWorker:
                 GeminiExporter,
                 RequestBackoffLimitReachedError,
                 SessionExpiredError,
+                SyncCancelledError,
                 get_cookies_from_local_browser,
             )
         except Exception as exc:
@@ -141,6 +150,7 @@ class GeminiWorker:
         self._exporter_cls = GeminiExporter
         self._backoff_limit_error_cls = RequestBackoffLimitReachedError
         self._session_expired_error_cls = SessionExpiredError
+        self._sync_cancelled_error_cls = SyncCancelledError
         self._cookies_loader = get_cookies_from_local_browser
 
     def _get_cookies(self) -> Dict[str, str]:
@@ -264,6 +274,33 @@ class GeminiWorker:
                 self._log("reinit", f"第 {attempt + 1} 次触发，正在重建 session: {exc}")
                 exporter = self._refresh_exporter_session(account_id)
         raise last_exc  # type: ignore[misc]
+
+    def _check_cancel_flag(self, account_id: str) -> bool:
+        """检查取消 flag 文件，若存在则删除并返回 True。"""
+        flag = self.output_dir / "accounts" / account_id / ".cancel_requested"
+        if flag.exists():
+            try:
+                flag.unlink()
+            except OSError:
+                pass
+            return True
+        return False
+
+    def _cleanup_stale_cancel_flags(self) -> None:
+        """启动时清理所有账号目录下的残留 cancel flag。"""
+        accounts_dir = self.output_dir / "accounts"
+        if not accounts_dir.exists():
+            return
+        for d in accounts_dir.iterdir():
+            if not d.is_dir():
+                continue
+            flag = d / ".cancel_requested"
+            if flag.exists():
+                try:
+                    flag.unlink()
+                    print(f"[worker:init] 清理残留 cancel flag: {flag}", file=sys.stderr)
+                except OSError:
+                    pass
 
     def _log(self, phase: str, message: str) -> None:
         print(f"[worker:{phase}] {message}", file=sys.stderr, flush=True)
@@ -433,6 +470,10 @@ class GeminiWorker:
                     raise
                 failed.append(cid)
 
+            if self._check_cancel_flag(account_id):
+                self._log(phase, f"检测到取消请求，在 {idx}/{total} 处中断")
+                raise JobCancelledError(f"用户取消，已处理 {idx}/{total} 个对话")
+
             self._log(
                 phase,
                 f"进度: {idx}/{total} ok={len(succeeded)} fail={len(failed)} cid={cid}",
@@ -451,7 +492,11 @@ class GeminiWorker:
 
         def run(exporter: Any) -> Dict[str, Any]:
             with contextlib.redirect_stdout(sys.stderr):
-                list_result = exporter.export_list_only(output_dir=str(self.output_dir), stop_on_unchanged=stop_on_unchanged)
+                list_result = exporter.export_list_only(
+                    output_dir=str(self.output_dir),
+                    stop_on_unchanged=stop_on_unchanged,
+                    cancel_check=lambda: self._check_cancel_flag(account_id),
+                )
             total = len(self._load_conversation_ids(account_id))
             updated_ids = list_result.get("updatedIds", []) if isinstance(list_result, dict) else []
             return {"total": total, "updatedIds": updated_ids}
@@ -467,7 +512,11 @@ class GeminiWorker:
 
         def run(exporter: Any) -> Dict[str, Any]:
             with contextlib.redirect_stdout(sys.stderr):
-                exporter.sync_single_conversation(conversation_id, output_dir=str(self.output_dir))
+                exporter.sync_single_conversation(
+                    conversation_id,
+                    output_dir=str(self.output_dir),
+                    cancel_check=lambda: self._check_cancel_flag(account_id),
+                )
             return {"conversationId": conversation_id}
 
         return self._run_with_session_retry(account_id, run)
@@ -557,19 +606,28 @@ class GeminiWorker:
                 continue
 
             self._emit_job_state(job, "running")
+            # 清理可能在任务排队期间写入的过期 flag（上一任务完成后用户点取消）
+            account_id_for_job = job.get("accountId", "")
+            if account_id_for_job:
+                self._check_cancel_flag(account_id_for_job)
             try:
                 result = self._execute_job(job)
                 done_progress = result.get("progress") if isinstance(result, dict) else None
                 self._emit_job_state(job, "done", progress=done_progress)
             except Exception as exc:
-                sess_cls = self._session_expired_error_cls
-                if self._is_backoff_limit_error(exc):
+                cancelled_cls = self._sync_cancelled_error_cls
+                if isinstance(exc, JobCancelledError) or (cancelled_cls and isinstance(exc, cancelled_cls)):
+                    self._log("job_loop", f"任务被用户取消: {exc}")
+                    self._emit_job_state(job, "cancelled")
+                elif self._is_backoff_limit_error(exc):
                     self._log("job_loop", f"任务因全局退避兜底提前结束: {exc}")
-                elif sess_cls and isinstance(exc, sess_cls):
+                    self._emit_job_state(job, "failed", error=self._to_error(exc))
+                elif self._session_expired_error_cls and isinstance(exc, self._session_expired_error_cls):
                     self._log("job_loop", f"任务失败（session 重试耗尽）: {exc}")
+                    self._emit_job_state(job, "failed", error=self._to_error(exc))
                 else:
                     traceback.print_exc(file=sys.stderr)
-                self._emit_job_state(job, "failed", error=self._to_error(exc))
+                    self._emit_job_state(job, "failed", error=self._to_error(exc))
             finally:
                 self._queue.task_done()
 

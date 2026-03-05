@@ -27,7 +27,7 @@ interface WorkerJobError {
 
 interface WorkerJobStatePayload {
   jobId: string;
-  state: "queued" | "running" | "done" | "failed";
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
   type: JobType;
   accountId: string;
   conversationId?: string;
@@ -510,13 +510,13 @@ function App() {
         if (payload.type === "sync_list") {
           if (payload.state === "queued" || payload.state === "running") {
             setListSyncing(true);
-          } else if (payload.state === "done" || payload.state === "failed") {
+          } else if (payload.state === "done" || payload.state === "failed" || payload.state === "cancelled") {
             setListSyncing(false);
           }
         } else if (payload.type === "sync_full") {
           if (payload.state === "queued" || payload.state === "running") {
             setFullSyncing(true);
-          } else if (payload.state === "done" || payload.state === "failed") {
+          } else if (payload.state === "done" || payload.state === "failed" || payload.state === "cancelled") {
             setFullSyncing(false);
           }
         } else if (payload.type === "sync_conversation") {
@@ -533,7 +533,7 @@ function App() {
           }
         }
 
-        if (payload.state === "done" || payload.state === "failed") {
+        if (payload.state === "done" || payload.state === "failed" || payload.state === "cancelled") {
           const accountId = payload.accountId;
           if (!accountId) return;
           const conversationId = payload.conversationId?.trim() ?? "";
@@ -557,7 +557,7 @@ function App() {
                 console.error("任务完成后刷新失败:", e);
               });
             }
-          } else {
+          } else if (payload.state !== "cancelled") {
             void refreshAfterSync(accountId, false).catch((e) => {
               console.error("任务完成后刷新失败:", e);
             });
@@ -889,6 +889,18 @@ function App() {
     }
   }
 
+  async function handleCancelList() {
+    if (!currentAccount) return;
+    await (invoke("cancel_job", { accountId: currentAccount.id }) as Promise<void>)
+      .catch((e: unknown) => console.error("取消列表同步失败:", e));
+  }
+
+  async function handleCancelFull() {
+    if (!currentAccount) return;
+    await (invoke("cancel_job", { accountId: currentAccount.id }) as Promise<void>)
+      .catch((e: unknown) => console.error("取消完全同步失败:", e));
+  }
+
   async function handleSyncAll() {
     if (fullSyncing || listSyncing || !currentAccount) return;
 
@@ -986,6 +998,8 @@ function App() {
           fullSyncing={fullSyncing}
           onSyncList={handleSyncList}
           onSyncFull={handleSyncAll}
+          onCancelList={handleCancelList}
+          onCancelFull={handleCancelFull}
           importingAccountData={importingAccountData}
           onImport={() => { void handleImport(); }}
           exportingAccountData={exportingAccountData || preparingExportData}
