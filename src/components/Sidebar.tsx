@@ -485,6 +485,7 @@ export function Sidebar({
                   onClick={() => onSelect(conv.id)}
                   syncing={syncingSet.has(conv.id)}
                   onSync={() => handleSyncConv(conv.id)}
+                  sortMode={conversationSortMode}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setContextMenu({ x: e.clientX, y: e.clientY, convId: conv.id });
@@ -735,12 +736,13 @@ export function Sidebar({
   );
 }
 
-function ConversationItem({ conversation, selected, onClick, syncing, onSync, onContextMenu }: {
+function ConversationItem({ conversation, selected, onClick, syncing, onSync, sortMode, onContextMenu }: {
   conversation: ConversationSummary;
   selected: boolean;
   onClick: () => void;
   syncing: boolean;
   onSync: () => void;
+  sortMode?: string;
   onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   const t = useTheme();
@@ -789,7 +791,7 @@ function ConversationItem({ conversation, selected, onClick, syncing, onSync, on
           {conversation.title}
         </div>
         <div style={{ fontSize: 11, color: isLost ? lostMetaColor : t.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
-          <span>{formatConvTime(conversation.updatedAt)}</span>
+          <span>{formatConvTime(sortMode === "created_desc" && conversation.createdAt ? conversation.createdAt : conversation.updatedAt)}</span>
           <span style={{ color: isLost ? lostMetaColor : t.textMuted, opacity: 0.6 }}>·</span>
           <span>{conversation.messageCount} 条</span>
         </div>
