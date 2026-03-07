@@ -7,7 +7,7 @@ import { useTheme } from "../theme";
 
 interface SidebarProps {
   conversations: ConversationSummary[];
-  conversationSortMode?: "updated_desc" | "size_desc" | "media_desc";
+  conversationSortMode?: "updated_desc" | "size_desc" | "media_desc" | "created_desc";
   onToggleConversationSort?: () => void;
   selectedId: string | null;
   onSelect: (id: string, messageId?: string) => void;
@@ -153,14 +153,18 @@ export function Sidebar({
     conversationSortMode === "size_desc"
       ? "当前按数量倒序（消息条数），点击切换为按媒体数量倒序"
       : conversationSortMode === "media_desc"
-        ? "当前按媒体数量倒序，点击切换为按更新时间新到旧"
-        : "当前按更新时间新到旧，点击切换为按数量倒序（消息条数）";
+        ? "当前按媒体数量倒序，点击切换为按创建时间新到旧"
+        : conversationSortMode === "created_desc"
+          ? "当前按创建时间新到旧，点击切换为按更新时间新到旧"
+          : "当前按更新时间新到旧，点击切换为按数量倒序（消息条数）";
   const conversationSortLabel =
     conversationSortMode === "size_desc"
       ? "数量↓"
       : conversationSortMode === "media_desc"
         ? "媒体↓"
-        : "时间↓";
+        : conversationSortMode === "created_desc"
+          ? "创建↓"
+          : "最新↓";
 
   useEffect(() => {
     if (disableAccountSwitch && showSwitcher) {

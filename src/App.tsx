@@ -11,7 +11,7 @@ import { Account, Conversation, ConversationSummary } from "./data/types";
 import { ThemeContext, lightTheme, darkTheme } from "./theme";
 
 type Screen = "account-picker" | "chat";
-type ConversationSortMode = "updated_desc" | "size_desc" | "media_desc";
+type ConversationSortMode = "updated_desc" | "size_desc" | "media_desc" | "created_desc";
 const AUTO_SYNC_RETRY_MS = 60 * 1000;
 const AUTO_SYNC_STALE_MS = 24 * 60 * 60 * 1000;
 const AUTO_SYNC_TRACK_MAX = 500;
@@ -232,6 +232,10 @@ function sortConversationSummaries(
     } else if (mode === "media_desc") {
       if (mediaDiff !== 0) return mediaDiff;
       if (sizeDiff !== 0) return sizeDiff;
+      if (updatedDiff !== 0) return updatedDiff;
+    } else if (mode === "created_desc") {
+      const createdDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (createdDiff !== 0) return createdDiff;
       if (updatedDiff !== 0) return updatedDiff;
     } else {
       if (updatedDiff !== 0) return updatedDiff;
@@ -993,6 +997,7 @@ function App() {
             setConversationSortMode((prev) => {
               if (prev === "updated_desc") return "size_desc";
               if (prev === "size_desc") return "media_desc";
+              if (prev === "media_desc") return "created_desc";
               return "updated_desc";
             })
           }

@@ -142,12 +142,17 @@ fn normalize_conversation_id(raw: &str) -> String {
     }
 }
 
-fn conversation_has_failed_data(jsonl_file: &Path) -> bool {
+fn conversation_meta_info(jsonl_file: &Path) -> (bool, Option<String>) {
     let raw = match std::fs::read_to_string(jsonl_file) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(_) => return (false, None),
     };
-    raw.contains("\"downloadFailed\": true") || raw.contains("\"downloadFailed\":true")
+    let has_failed = raw.contains("\"downloadFailed\": true") || raw.contains("\"downloadFailed\":true");
+    let created_at = raw.lines().next().and_then(|line| {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        v.get("createdAt")?.as_str().map(|s| s.to_string())
+    });
+    (has_failed, created_at)
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -1680,11 +1685,14 @@ fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Res
             continue;
         }
 
-        let has_failed_data = conversation_has_failed_data(&conversations_dir.join(format!("{}.jsonl", cid)));
+        let (has_failed_data, created_at) = conversation_meta_info(&conversations_dir.join(format!("{}.jsonl", cid)));
         obj.insert(
             "hasFailedData".to_string(),
             serde_json::Value::Bool(has_failed_data),
         );
+        if let Some(ca) = created_at {
+            obj.insert("createdAt".to_string(), serde_json::Value::String(ca));
+        }
     }
 
     serde_json::to_string(&items).map_err(|e| e.to_string())

@@ -42,6 +42,7 @@ export interface ConversationSummary {
   videoCount?: number;
   status?: string;          // normal | lost | hidden | ...
   updatedAt: string;        // ISO 8601
+  createdAt?: string;       // ISO 8601, injected from .jsonl meta at load time
   remoteHash: string | null;
 }
 
