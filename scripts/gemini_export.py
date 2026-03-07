@@ -1565,10 +1565,16 @@ class GeminiExporter:
                 new_msg_rows = new_rows_full[1:]
 
                 existing_msg_rows = []
+                existing_created_at = None
                 if jsonl_file.exists():
                     with open(jsonl_file, "r", encoding="utf-8") as fh:
                         for i, line in enumerate(fh):
                             if i == 0:
+                                try:
+                                    old_meta = json.loads(line)
+                                    existing_created_at = old_meta.get("createdAt")
+                                except json.JSONDecodeError:
+                                    pass
                                 continue
                             line = line.strip()
                             if not line:
@@ -1577,6 +1583,8 @@ class GeminiExporter:
                                 existing_msg_rows.append(json.loads(line))
                             except json.JSONDecodeError:
                                 continue
+                if existing_created_at:
+                    new_meta["createdAt"] = existing_created_at
 
                 merged_msg_rows, removed_msg_rows = _merge_message_rows_for_write(
                     new_msg_rows, existing_msg_rows
