@@ -234,7 +234,7 @@ function sortConversationSummaries(
       if (sizeDiff !== 0) return sizeDiff;
       if (updatedDiff !== 0) return updatedDiff;
     } else if (mode === "created_desc") {
-      const createdDiff = new Date(b.createdAt ?? "").getTime() - new Date(a.createdAt ?? "").getTime();
+      const createdDiff = new Date(b.createdAt ?? b.updatedAt).getTime() - new Date(a.createdAt ?? a.updatedAt).getTime();
       if (createdDiff !== 0) return createdDiff;
       if (updatedDiff !== 0) return updatedDiff;
     } else {
