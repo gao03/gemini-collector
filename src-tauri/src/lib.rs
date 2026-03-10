@@ -1303,8 +1303,8 @@ async fn import_account_zip(
     if let Some(aid) = account_id2 {
         let account_dir = data_dir2.join("accounts").join(&aid);
         let conversations_dir = account_dir.join("conversations");
-        if let Ok(conn) = search::open_search_db(&account_dir) {
-            let _ = search::index_all(&conn, &conversations_dir);
+        if let Ok(index) = search::open_or_create_index(&account_dir) {
+            let _ = search::index_all(&index, &account_dir, &conversations_dir);
         }
     }
 
@@ -1366,8 +1366,8 @@ fn delete_conversation(
     }
 
     // 清理搜索索引
-    if let Ok(conn) = search::open_search_db(&account_dir) {
-        let _ = search::remove_conversation(&conn, &bare_id);
+    if let Ok(index) = search::open_or_create_index(&account_dir) {
+        let _ = search::remove_conversation(&index, &account_dir, &bare_id);
     }
 
     Ok(())
@@ -1410,11 +1410,13 @@ fn clear_account_data(
         std::fs::remove_file(&media_manifest_file).map_err(|e| e.to_string())?;
     }
     // 清理搜索索引
-    for suffix in ["", "-wal", "-shm"] {
-        let p = account_dir.join(format!("search.db{}", suffix));
-        if p.exists() {
-            let _ = std::fs::remove_file(&p);
-        }
+    let search_idx_dir = account_dir.join("search_index");
+    if search_idx_dir.exists() {
+        let _ = std::fs::remove_dir_all(&search_idx_dir);
+    }
+    let search_mtimes = account_dir.join("search_mtimes.json");
+    if search_mtimes.exists() {
+        let _ = std::fs::remove_file(&search_mtimes);
     }
 
     std::fs::create_dir_all(&conversations_dir).map_err(|e| e.to_string())?;
@@ -1721,13 +1723,13 @@ fn update_search_index(
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
 
-    let conn = search::open_search_db(&account_dir)?;
+    let index = search::open_or_create_index(&account_dir)?;
     let mut indexed = 0u32;
     for cid in &conversation_ids {
         let bare = normalize_conversation_id(cid);
         let jsonl = conversations_dir.join(format!("{}.jsonl", bare));
         if jsonl.exists() {
-            search::index_conversation(&conn, &bare, &jsonl)?;
+            search::index_conversation(&index, &account_dir, &bare, &jsonl)?;
             indexed += 1;
         }
     }
@@ -1745,10 +1747,10 @@ fn search_conversations(
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
 
-    let conn = search::open_search_db(&account_dir)?;
+    let index = search::open_or_create_index(&account_dir)?;
     // 确保索引是最新的
-    search::index_all(&conn, &conversations_dir)?;
-    let results = search::search_messages(&conn, &query, limit.unwrap_or(50))?;
+    search::index_all(&index, &account_dir, &conversations_dir)?;
+    let results = search::search_messages(&index, &query, limit.unwrap_or(50))?;
     serde_json::to_string(&results).map_err(|e| e.to_string())
 }
 
@@ -1758,21 +1760,18 @@ fn rebuild_search_index(app: tauri::AppHandle, account_id: String) -> Result<Str
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
 
-    // 删除旧 db 强制重建
-    let db_path = account_dir.join("search.db");
-    if db_path.exists() {
-        std::fs::remove_file(&db_path).map_err(|e| e.to_string())?;
+    // 删除旧索引强制重建
+    let search_idx_dir = account_dir.join("search_index");
+    if search_idx_dir.exists() {
+        std::fs::remove_dir_all(&search_idx_dir).map_err(|e| e.to_string())?;
     }
-    // 清理 WAL/SHM
-    for suffix in ["-wal", "-shm"] {
-        let p = account_dir.join(format!("search.db{}", suffix));
-        if p.exists() {
-            let _ = std::fs::remove_file(&p);
-        }
+    let search_mtimes = account_dir.join("search_mtimes.json");
+    if search_mtimes.exists() {
+        let _ = std::fs::remove_file(&search_mtimes);
     }
 
-    let conn = search::open_search_db(&account_dir)?;
-    let count = search::index_all(&conn, &conversations_dir)?;
+    let index = search::open_or_create_index(&account_dir)?;
+    let count = search::index_all(&index, &account_dir, &conversations_dir)?;
     Ok(serde_json::json!({ "indexed": count }).to_string())
 }
 
