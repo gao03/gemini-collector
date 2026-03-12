@@ -67,9 +67,15 @@
 .prose-ai p {
   margin: 0.4em 0;
 }
-.prose-ai ul, .prose-ai ol {
+.prose-ai ul {
   margin: 0.4em 0;
   padding-left: 1.4em;
+  list-style-type: disc;
+}
+.prose-ai ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+  list-style-type: decimal;
 }
 .prose-ai li {
   margin: 0.2em 0;
