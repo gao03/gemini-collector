@@ -263,6 +263,7 @@ function App() {
   const [screen, setScreen] = useState<Screen>("account-picker");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsImportError, setAccountsImportError] = useState<string | null>(null);
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [conversationSummaries, setConversationSummaries] = useState<ConversationSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -367,8 +368,10 @@ function App() {
         if (loaded.length === 0) {
           try {
             await invoke("run_accounts_import");
-          } catch (e) {
+          } catch (e: unknown) {
             console.error("自动导入账号失败:", e);
+            const msg = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+            if (!cancelled) setAccountsImportError(msg);
           }
           loaded = parseAccountsPayload(await invoke<string>("load_accounts"));
         }
@@ -960,6 +963,7 @@ function App() {
         <AccountPicker
           accounts={accounts}
           loading={accountsLoading}
+          importError={accountsImportError}
           onSelect={handleSelectAccount}
           isDark={isDark}
           onToggleDark={() => setIsDark((v) => !v)}

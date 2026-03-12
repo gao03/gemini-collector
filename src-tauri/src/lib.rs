@@ -1611,7 +1611,24 @@ async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
     if result.status.success() {
         Ok(String::from_utf8_lossy(&result.stdout).to_string())
     } else {
-        Err(String::from_utf8_lossy(&result.stderr).to_string())
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let mut msg = String::new();
+        let stdout_trimmed = stdout.trim();
+        let stderr_trimmed = stderr.trim();
+        if !stdout_trimmed.is_empty() {
+            msg.push_str(stdout_trimmed);
+        }
+        if !stderr_trimmed.is_empty() {
+            if !msg.is_empty() {
+                msg.push('\n');
+            }
+            msg.push_str(stderr_trimmed);
+        }
+        if msg.is_empty() {
+            msg.push_str(&format!("进程退出码: {}", result.status));
+        }
+        Err(msg)
     }
 }
 
