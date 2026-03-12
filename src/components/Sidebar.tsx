@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState /* , useRef, useCallback */ } from "react"; // [SEARCH DISABLED] useRef, useCallback
+// [SEARCH DISABLED] import { createPortal } from "react-dom";
+// [SEARCH DISABLED] import { invoke } from "@tauri-apps/api/core";
 import { Virtuoso } from "react-virtuoso";
-import { ConversationSummary, Account, SearchResult } from "../data/types";
+import { ConversationSummary, Account /* , SearchResult */ } from "../data/types";
 import { useTheme } from "../theme";
 
 interface SidebarProps {
@@ -68,15 +68,16 @@ export function Sidebar({
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState<"list" | "full" | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; convId: string } | null>(null);
-  const [showSearch, setShowSearch] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const searchPanelRef = useRef<HTMLDivElement | null>(null);
+  // [SEARCH DISABLED] const [showSearch, setShowSearch] = useState(false);
+  // [SEARCH DISABLED] const [searchQuery, setSearchQuery] = useState("");
+  // [SEARCH DISABLED] const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  // [SEARCH DISABLED] const [searching, setSearching] = useState(false);
+  // [SEARCH DISABLED] const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // [SEARCH DISABLED] const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // [SEARCH DISABLED] const searchPanelRef = useRef<HTMLDivElement | null>(null);
   const syncingSet = new Set(syncingConversationIds);
 
+  /* [SEARCH DISABLED]
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) {
       setSearchResults([]);
@@ -148,6 +149,7 @@ export function Sidebar({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [showSearch]);
+  */
   const otherAccounts = accounts.filter((a) => a.id !== currentAccount.id);
   const conversationSortTitle =
     conversationSortMode === "size_desc"
@@ -204,7 +206,7 @@ export function Sidebar({
             对话历史
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            {/* 搜索按钮 */}
+            {/* [SEARCH DISABLED] 搜索按钮
             <button
               title="搜索对话内容"
               onClick={(e) => {
@@ -233,6 +235,7 @@ export function Sidebar({
             >
               <SearchIcon color={t.textMuted} />
             </button>
+            */}
             {/* 导入按钮 */}
             <button
               title="导入 ZIP 压缩包到当前账号"
@@ -358,7 +361,7 @@ export function Sidebar({
             </button>
           </div>
         </div>
-        {/* 搜索弹窗 — Portal 到 body，全屏居中 */}
+        {/* [SEARCH DISABLED] 搜索弹窗 — Portal 到 body，全屏居中
         {showSearch && createPortal(
           <div style={{
             position: "fixed",
@@ -467,6 +470,7 @@ export function Sidebar({
           </div>,
           document.body
         )}
+        */}
         {conversations.length === 0 ? (
           <div style={{ padding: "10px 14px", fontSize: 12, color: t.textMuted }}>
             暂无列表数据，点击底部列表同步按钮拉取
@@ -890,6 +894,7 @@ function CheckIcon({ color }: { color: string }) {
   );
 }
 
+/* [SEARCH DISABLED]
 function SearchIcon({ color, style }: { color: string; style?: React.CSSProperties }) {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={style}>
@@ -898,6 +903,7 @@ function SearchIcon({ color, style }: { color: string; style?: React.CSSProperti
     </svg>
   );
 }
+*/
 
 function SyncIcon({ spinning, color, small = false }: { spinning: boolean; color: string; small?: boolean }) {
   const size = small ? 11 : 14;
