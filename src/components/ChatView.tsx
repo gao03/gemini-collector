@@ -89,18 +89,95 @@ async function computeImageDHash(url: string, size = 8): Promise<number[] | null
   });
 }
 
-// Fix CommonMark bold/italic parsing failure when ** is adjacent to CJK/Unicode chars.
-// Inserts zero-width space (U+200B) between non-ASCII characters and * markers.
-// Also escapes $ followed by digits (currency) to prevent remarkMath misinterpretation.
+// ─── Markdown fix pipeline ───────────────────────────────────────────────────
+// Gemini outputs often contain:
+//   1. Zero-width chars (U+200B etc.) around ** that break CommonMark flanking rules
+//   2. Unpaired ** (e.g. opening ** with no close) that cascade-misalign all bold spans
+//   3. CJK chars directly adjacent to ** which CommonMark doesn't recognise as bold
+//
+// Pipeline:  strip ZWS → protect code → balance ** pairs → restore code → CJK ZWS fix
+
+const ZWS_AROUND_STAR = /[\u200B\u200C\u200D\uFEFF\u2060]+(\*+)/g;
+const STAR_AROUND_ZWS = /(\*+)[\u200B\u200C\u200D\uFEFF\u2060]+/g;
+
+/**
+ * Escape unmatched ** using right-to-left greedy pairing.
+ *
+ * Right-to-left pairing preferentially matches the CLOSEST pairs first,
+ * so a stray opening ** (common Gemini artefact) is left unmatched and
+ * gets escaped, while all intended **word** pairs stay intact.
+ */
+function balanceBoldMarkers(text: string): string {
+  // 1. Collect all ** positions
+  const positions: number[] = [];
+  let idx = 0;
+  while ((idx = text.indexOf("**", idx)) !== -1) {
+    positions.push(idx);
+    idx += 2;
+  }
+  if (positions.length < 2 && positions.length === 1) {
+    return text.slice(0, positions[0]) + "\\*\\*" + text.slice(positions[0] + 2);
+  }
+  if (positions.length % 2 === 0) return text; // all paired, nothing to fix
+
+  // 2. Right-to-left greedy pairing
+  const matched = new Set<number>();
+  for (let i = positions.length - 1; i >= 1; i--) {
+    if (matched.has(i)) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      if (!matched.has(j)) {
+        matched.add(i);
+        matched.add(j);
+        break;
+      }
+    }
+  }
+
+  // 3. Escape unmatched ** (right-to-left to preserve indices)
+  let result = text;
+  for (let i = positions.length - 1; i >= 0; i--) {
+    if (!matched.has(i)) {
+      const p = positions[i];
+      result = result.slice(0, p) + "\\*\\*" + result.slice(p + 2);
+    }
+  }
+  return result;
+}
+
 function fixMarkdown(content: string): string {
-  return content
+  let text = content
     // Strip Gemini internal iemoji: markers, keep the code value
     .replace(/iemoji:([^:\s)]{1,20})/g, "$1")
     // Escape currency $ (e.g. $300) so remarkMath doesn't treat them as math delimiters.
-    // Negative lookbehind (?<!\$) avoids escaping the second $ in $$...$$ display math blocks.
     .replace(/(?<!\$)\$(\d)/g, "\\$$1")
+    // 1. Strip zero-width chars adjacent to * markers (Gemini artefacts)
+    .replace(ZWS_AROUND_STAR, "$1")
+    .replace(STAR_AROUND_ZWS, "$1");
+
+  // 2. Protect fenced & inline code from bold-balancing
+  const codeSlots: string[] = [];
+  const codePH = (i: number) => `\x00C${i}\x00`;
+  text = text.replace(/```[\s\S]*?```/g, (m) => {
+    codeSlots.push(m);
+    return codePH(codeSlots.length - 1);
+  });
+  text = text.replace(/`[^`]+`/g, (m) => {
+    codeSlots.push(m);
+    return codePH(codeSlots.length - 1);
+  });
+
+  // 3. Balance bold markers — escape any unpaired **
+  text = balanceBoldMarkers(text);
+
+  // 4. Restore code blocks
+  text = text.replace(/\x00C(\d+)\x00/g, (_, i) => codeSlots[parseInt(i)]);
+
+  // 5. CJK fix — insert ZWS between non-ASCII chars and * markers
+  text = text
     .replace(/([^\x00-\x7F])(\*+)/g, "$1\u200B$2")
     .replace(/(\*+)([^\x00-\x7F])/g, "$1\u200B$2");
+
+  return text;
 }
 
 // ─── Timeline constants ────────────────────────────────────────────────────
