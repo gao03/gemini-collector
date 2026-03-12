@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 from pathlib import Path
 
 try:
@@ -85,6 +86,40 @@ def _select_preferred_google_cookies(cookie_items):
     return selected
 
 
+def _check_keychain_access(service, user):
+    """检测 macOS Keychain 中浏览器加密密钥是否可读。返回 (ok, detail)。"""
+    if platform.system() != "Darwin":
+        return True, ""
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/security", "-q", "find-generic-password", "-w", "-a", user, "-s", service],
+            capture_output=True, timeout=10,
+        )
+        if proc.returncode == 0:
+            return True, ""
+        stderr = proc.stderr.decode(errors="replace").strip()
+        return False, f"Keychain 读取 \"{service}\" 失败 (exit {proc.returncode}): {stderr}"
+    except FileNotFoundError:
+        return False, "未找到 /usr/bin/security 命令"
+    except Exception as e:
+        return False, f"Keychain 检测异常: {e}"
+
+
+def _check_file_readable(path):
+    """检测文件是否存在且可读。返回 (ok, detail)。"""
+    p = Path(path)
+    if not p.exists():
+        return False, f"文件不存在: {path}"
+    try:
+        with open(p, "rb") as f:
+            f.read(16)
+        return True, ""
+    except PermissionError:
+        return False, f"权限不足，无法读取: {path} (请在 系统设置→隐私与安全性→完全磁盘访问 中授权本应用)"
+    except Exception as e:
+        return False, f"无法读取 {path}: {e}"
+
+
 def _discover_chrome_cookie_files():
     """枚举本机所有可能的 Chrome/Chromium 系 Cookies 文件路径，Network/Cookies 优先。"""
     system = platform.system()
@@ -124,13 +159,29 @@ def _discover_chrome_cookie_files():
         ]
 
     results = []
+    permission_issues = []
+
     for browser_name, loader_name, base_dirs in browser_specs:
         loader = getattr(browser_cookie3, loader_name, None)
         if loader is None:
             continue
         for base_dir in base_dirs:
             if not base_dir.is_dir():
+                # 父目录在、子目录不在 → 可能被 TCC 隐藏
+                if base_dir.parent.is_dir():
+                    try:
+                        siblings = [d.name for d in base_dir.parent.iterdir()]
+                        if base_dir.name not in siblings and base_dir.name in ("Chrome", "Google Chrome"):
+                            permission_issues.append(
+                                f"[{browser_name}] 目录 {base_dir} 不可见，"
+                                f"可能被系统隐私保护屏蔽 (请在 系统设置→隐私与安全性→完全磁盘访问 中授权本应用)"
+                            )
+                    except PermissionError:
+                        permission_issues.append(
+                            f"[{browser_name}] 无权列出 {base_dir.parent} 目录内容"
+                        )
                 continue
+
             # 收集所有 profile 目录
             profile_dirs = []
             for name in ["Default", "Guest Profile", "System Profile"]:
@@ -139,14 +190,40 @@ def _discover_chrome_cookie_files():
                     profile_dirs.append(p)
             profile_dirs += sorted(base_dir.glob("Profile *"))
 
+            if not profile_dirs:
+                # 有 Local State 说明浏览器用过，但 Profile 被隐藏
+                try:
+                    children = [d.name for d in base_dir.iterdir()]
+                    if "Default" not in children and (base_dir / "Local State").exists():
+                        permission_issues.append(
+                            f"[{browser_name}] {base_dir} 下 Profile 目录不可见，"
+                            f"可能被系统隐私保护屏蔽 (请在 系统设置→隐私与安全性→完全磁盘访问 中授权本应用)"
+                        )
+                except PermissionError:
+                    permission_issues.append(
+                        f"[{browser_name}] 无权列出 {base_dir} 目录内容 (请授权完全磁盘访问)"
+                    )
+
             for pdir in profile_dirs:
-                # Network/Cookies 优先
                 for rel in ["Network/Cookies", "Cookies"]:
                     f = pdir / rel
                     if f.is_file():
-                        results.append((browser_name, loader, str(f), pdir.name))
-                        break  # 同一 profile 只取第一个找到的
-    return results
+                        readable, detail = _check_file_readable(f)
+                        if readable:
+                            results.append((browser_name, loader, str(f), pdir.name))
+                        else:
+                            permission_issues.append(f"[{browser_name}/{pdir.name}] {detail}")
+                        break
+    return results, permission_issues
+
+
+# 浏览器名 → (Keychain service, Keychain user)
+_KEYCHAIN_MAP = {
+    "Chrome":   ("Chrome Safe Storage", "Chrome"),
+    "Chromium": ("Chromium Safe Storage", "Chromium"),
+    "Brave":    ("Brave Safe Storage", "Brave"),
+    "Edge":     ("Microsoft Edge Safe Storage", "Microsoft Edge"),
+}
 
 
 def get_cookies_from_local_browser():
@@ -156,12 +233,13 @@ def get_cookies_from_local_browser():
     key_cookies = {"__Secure-1PSID", "__Secure-1PSIDTS"}
     domain_names = [".google.com", "accounts.google.com", "gemini.google.com"]
 
-    cookie_files = _discover_chrome_cookie_files()
+    cookie_files, permission_issues = _discover_chrome_cookie_files()
+    attempted_browsers = set()
 
     if cookie_files:
-        # 逐个 profile 尝试，以第一个找到可用登录态的为准
         for browser_name, loader, cookie_file, profile_name in cookie_files:
             label = f"{browser_name}/{profile_name}"
+            attempted_browsers.add(browser_name)
             try:
                 collected_items = []
                 for dn in domain_names:
@@ -181,7 +259,6 @@ def get_cookies_from_local_browser():
             except Exception as e:
                 print(f"  - {label}: 读取失败 ({e})")
     else:
-        # 回退：未发现任何 cookie 文件，使用 browser_cookie3 默认逻辑
         print("  未发现已知 cookie 文件，回退到 browser_cookie3 默认扫描...")
         fallback_loaders = [
             ("Chrome", getattr(browser_cookie3, "chrome", None)),
@@ -192,6 +269,7 @@ def get_cookies_from_local_browser():
         for browser_name, loader in fallback_loaders:
             if loader is None:
                 continue
+            attempted_browsers.add(browser_name)
             try:
                 collected_items = []
                 for dn in domain_names:
@@ -210,6 +288,27 @@ def get_cookies_from_local_browser():
                 print(f"  - {browser_name}: 已读取 {len(collected)} 个 cookies，但缺少关键登录态")
             except Exception as e:
                 print(f"  - {browser_name}: 读取失败 ({e})")
+
+    # ── 读取失败，输出诊断 ──
+    # 文件系统权限问题（discover 阶段已收集）
+    if permission_issues:
+        print("[!] 检测到权限问题:")
+        for issue in permission_issues:
+            print(f"    {issue}")
+
+    # Keychain 事后诊断：仅检测找到了 cookie 文件的浏览器（非 fallback 路径尝试的所有浏览器）
+    if platform.system() == "Darwin" and cookie_files:
+        checked = set()
+        for browser_name, _, _, _ in cookie_files:
+            if browser_name in checked:
+                continue
+            checked.add(browser_name)
+            kc = _KEYCHAIN_MAP.get(browser_name)
+            if not kc:
+                continue
+            ok, detail = _check_keychain_access(kc[0], kc[1])
+            if not ok:
+                print(f"[!] {detail}")
 
     return {}
 
