@@ -4,19 +4,22 @@
 
 import codecs
 import json
+import os
+import platform
 import re
+from pathlib import Path
 
 try:
     import httpx
 except ImportError:
-    import os, sys
+    import sys
     os.system(f"{sys.executable} -m pip install httpx")
     import httpx
 
 try:
     import browser_cookie3
 except ImportError:
-    import os, sys
+    import sys
     os.system(f"{sys.executable} -m pip install browser-cookie3")
     import browser_cookie3
 
@@ -82,43 +85,131 @@ def _select_preferred_google_cookies(cookie_items):
     return selected
 
 
+def _discover_chrome_cookie_files():
+    """枚举本机所有可能的 Chrome/Chromium 系 Cookies 文件路径，Network/Cookies 优先。"""
+    system = platform.system()
+
+    # (浏览器名, loader 函数名, 基础目录列表)
+    browser_specs = []
+
+    if system == "Darwin":
+        base = Path.home() / "Library/Application Support"
+        browser_specs = [
+            ("Chrome", "chrome", [base / f"Google/{ch}" for ch in
+                ["Chrome", "Chrome Beta", "Chrome Dev", "Chrome Canary"]]),
+            ("Chromium", "chromium", [base / "Chromium"]),
+            ("Brave", "brave", [base / "BraveSoftware/Brave-Browser"]),
+            ("Edge", "edge", [base / "Microsoft Edge"]),
+        ]
+    elif system == "Linux":
+        suffixes = ["", "-beta", "-unstable"]
+        browser_specs = [
+            ("Chrome", "chrome",
+                [Path.home() / f".config/google-chrome{s}" for s in suffixes]
+                + [Path.home() / f".var/app/com.google.Chrome/config/google-chrome{s}" for s in suffixes]),
+            ("Chromium", "chromium",
+                [Path.home() / ".config/chromium",
+                 Path.home() / "snap/chromium/common/chromium"]),
+            ("Brave", "brave", [Path.home() / ".config/BraveSoftware/Brave-Browser"]),
+            ("Edge", "edge", [Path.home() / ".config/microsoft-edge"]),
+        ]
+    elif system == "Windows":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        browser_specs = [
+            ("Chrome", "chrome", [local / f"Google/{ch}/User Data" for ch in
+                ["Chrome", "Chrome Beta", "Chrome Dev", "Chrome SxS"]]),
+            ("Chromium", "chromium", [local / "Chromium/User Data"]),
+            ("Brave", "brave", [local / "BraveSoftware/Brave-Browser/User Data"]),
+            ("Edge", "edge", [local / "Microsoft/Edge/User Data"]),
+        ]
+
+    results = []
+    for browser_name, loader_name, base_dirs in browser_specs:
+        loader = getattr(browser_cookie3, loader_name, None)
+        if loader is None:
+            continue
+        for base_dir in base_dirs:
+            if not base_dir.is_dir():
+                continue
+            # 收集所有 profile 目录
+            profile_dirs = []
+            for name in ["Default", "Guest Profile", "System Profile"]:
+                p = base_dir / name
+                if p.is_dir():
+                    profile_dirs.append(p)
+            profile_dirs += sorted(base_dir.glob("Profile *"))
+
+            for pdir in profile_dirs:
+                # Network/Cookies 优先
+                for rel in ["Network/Cookies", "Cookies"]:
+                    f = pdir / rel
+                    if f.is_file():
+                        results.append((browser_name, loader, str(f), pdir.name))
+                        break  # 同一 profile 只取第一个找到的
+    return results
+
+
 def get_cookies_from_local_browser():
     """优先从本机常用浏览器读取 Google/Gemini cookies"""
     print("[*] 尝试从本机浏览器读取 cookies...")
 
     key_cookies = {"__Secure-1PSID", "__Secure-1PSIDTS"}
-    cookie_loaders = [
-        ("Chrome", getattr(browser_cookie3, "chrome", None)),
-        ("Chromium", getattr(browser_cookie3, "chromium", None)),
-        ("Brave", getattr(browser_cookie3, "brave", None)),
-        ("Edge", getattr(browser_cookie3, "edge", None)),
-    ]
+    domain_names = [".google.com", "accounts.google.com", "gemini.google.com"]
 
-    for browser_name, loader in cookie_loaders:
-        if loader is None:
-            continue
+    cookie_files = _discover_chrome_cookie_files()
 
-        try:
-            collected_items = []
-            for domain_name in [".google.com", "accounts.google.com", "gemini.google.com"]:
-                jar = loader(domain_name=domain_name)
-                for c in jar:
-                    collected_items.append(c)
+    if cookie_files:
+        # 逐个 profile 尝试，以第一个找到可用登录态的为准
+        for browser_name, loader, cookie_file, profile_name in cookie_files:
+            label = f"{browser_name}/{profile_name}"
+            try:
+                collected_items = []
+                for dn in domain_names:
+                    jar = loader(cookie_file=cookie_file, domain_name=dn)
+                    collected_items.extend(jar)
 
-            collected = _select_preferred_google_cookies(collected_items)
+                collected = _select_preferred_google_cookies(collected_items)
+                if not collected:
+                    print(f"  - {label}: 未读取到可用 cookie")
+                    continue
 
-            if not collected:
-                print(f"  - {browser_name}: 未读取到可用 cookie")
+                if any(k in collected for k in key_cookies):
+                    print(f"  - {label}: 成功读取 {len(collected)} 个 cookies")
+                    return collected
+
+                print(f"  - {label}: 已读取 {len(collected)} 个 cookies，但缺少关键登录态")
+            except Exception as e:
+                print(f"  - {label}: 读取失败 ({e})")
+    else:
+        # 回退：未发现任何 cookie 文件，使用 browser_cookie3 默认逻辑
+        print("  未发现已知 cookie 文件，回退到 browser_cookie3 默认扫描...")
+        fallback_loaders = [
+            ("Chrome", getattr(browser_cookie3, "chrome", None)),
+            ("Chromium", getattr(browser_cookie3, "chromium", None)),
+            ("Brave", getattr(browser_cookie3, "brave", None)),
+            ("Edge", getattr(browser_cookie3, "edge", None)),
+        ]
+        for browser_name, loader in fallback_loaders:
+            if loader is None:
                 continue
+            try:
+                collected_items = []
+                for dn in domain_names:
+                    jar = loader(domain_name=dn)
+                    collected_items.extend(jar)
 
-            found = [k for k in key_cookies if k in collected]
-            if found:
-                print(f"  - {browser_name}: 成功读取 {len(collected)} 个 cookies")
-                return collected
+                collected = _select_preferred_google_cookies(collected_items)
+                if not collected:
+                    print(f"  - {browser_name}: 未读取到可用 cookie")
+                    continue
 
-            print(f"  - {browser_name}: 已读取 {len(collected)} 个 cookies，但缺少关键登录态")
-        except Exception as e:
-            print(f"  - {browser_name}: 读取失败 ({e})")
+                if any(k in collected for k in key_cookies):
+                    print(f"  - {browser_name}: 成功读取 {len(collected)} 个 cookies")
+                    return collected
+
+                print(f"  - {browser_name}: 已读取 {len(collected)} 个 cookies，但缺少关键登录态")
+            except Exception as e:
+                print(f"  - {browser_name}: 读取失败 ({e})")
 
     return {}
 
