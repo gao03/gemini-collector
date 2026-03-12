@@ -5,12 +5,13 @@ import { useTheme } from "../theme";
 interface AccountPickerProps {
   accounts: Account[];
   loading: boolean;
+  importError?: string | null;
   onSelect: (account: Account) => void;
   isDark: boolean;
   onToggleDark: () => void;
 }
 
-export function AccountPicker({ accounts, loading, onSelect, isDark, onToggleDark }: AccountPickerProps) {
+export function AccountPicker({ accounts, loading, importError, onSelect, isDark, onToggleDark }: AccountPickerProps) {
   const t = useTheme();
 
   return (
@@ -56,6 +57,33 @@ export function AccountPicker({ accounts, loading, onSelect, isDark, onToggleDar
               应用已自动尝试从本地浏览器 Cookies 导入账号。<br />
               请确认已在 Chrome 登录 Gemini 后重新打开应用。
             </div>
+            {importError && (
+              <div style={{
+                marginTop: 16,
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 10,
+                background: t.isDark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)",
+                border: `1px solid ${t.isDark ? "rgba(239,68,68,0.25)" : "rgba(239,68,68,0.2)"}`,
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: t.isDark ? "#f87171" : "#dc2626", marginBottom: 6 }}>
+                  诊断信息
+                </div>
+                <pre style={{
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  color: t.isDark ? "#fca5a5" : "#991b1b",
+                  margin: 0,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                  maxHeight: 200,
+                  overflowY: "auto",
+                  fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
+                }}>
+                  {importError}
+                </pre>
+              </div>
+            )}
           </div>
         ) : (
           /* Account list */
