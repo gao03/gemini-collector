@@ -609,54 +609,6 @@ class GeminiExporter:
 
         return all_turns
 
-    def get_chat_latest_update(self, chat_id):
-        """按 chat_id 查询会话最新更新时间（秒级时间戳）"""
-        page = 0
-
-        payload = json.dumps([BATCH_SIZE, None, [0, None, 1]])
-        result = self._batchexecute("MaZiqc", payload, source_path="/app")
-
-        while True:
-            page += 1
-
-            if not result or not isinstance(result, list) or len(result) < 3 or not result[2]:
-                return None
-
-            chats = result[2]
-            for chat in chats:
-                if not isinstance(chat, list) or len(chat) == 0:
-                    continue
-                if chat[0] == chat_id:
-                    return _extract_chat_latest_update(chat)
-
-            next_token = result[1] if len(result) > 1 else None
-            if not next_token or not isinstance(next_token, str):
-                return None
-
-            payload = json.dumps([BATCH_SIZE, next_token])
-            result = self._batchexecute("MaZiqc", payload, source_path="/app")
-
-    def is_chat_updated(self, chat_id, last_update_ts):
-        """比较会话最新更新时间，返回是否有更新"""
-        try:
-            previous_ts = int(last_update_ts)
-        except (TypeError, ValueError):
-            raise ValueError("last_update_ts 必须是秒级时间戳（整数）")
-
-        latest_ts = self.get_chat_latest_update(chat_id)
-        updated = latest_ts is not None and latest_ts > previous_ts
-
-        return {
-            "chat_id": chat_id,
-            "previous_update_ts": previous_ts,
-            "previous_update_iso": _to_iso_utc(previous_ts),
-            "latest_update_ts": latest_ts,
-            "latest_update_iso": _to_iso_utc(latest_ts),
-            "updated": updated,
-            "found": latest_ts is not None,
-        }
-
-
     # ------------------------------------------------------------------
     # 批量下载媒体文件（无 CDP）
     # ------------------------------------------------------------------

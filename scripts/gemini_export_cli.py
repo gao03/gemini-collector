@@ -569,8 +569,6 @@ def main():
     parser.add_argument("--user", help="指定 Google 账号（支持 0/1/2 或邮箱）")
     parser.add_argument("--account-id", help="强制写入指定账号目录 ID（用于 GUI 侧绑定）")
     parser.add_argument("--account-email", help="账号邮箱提示（用于写入 meta，不影响请求）")
-    parser.add_argument("--check-chat-id", help="检查指定对话是否更新（需配合 --last-update-ts）")
-    parser.add_argument("--last-update-ts", type=int, help="上次记录的对话更新时间（秒级时间戳）")
     parser.add_argument("--incremental", action="store_true", help="增量更新导出（命中首个未更新会话后停止）")
     parser.add_argument("--sync-list-only", action="store_true", help="仅同步会话列表（支持分页断点续传）")
     parser.add_argument("--sync-conversation", action="store_true", help="仅同步单个会话详情")
@@ -613,23 +611,6 @@ def main():
         return
 
     # 3. 导出 / 仅列表测试
-    if args.check_chat_id:
-        if args.last_update_ts is None:
-            print("[!] 使用 --check-chat-id 时必须提供 --last-update-ts")
-            sys.exit(1)
-        try:
-            exporter.init_auth()
-        except Exception as e:
-            print(f"[!] cookies 鉴权失败: {e}")
-            print("    请确认浏览器已登录 Gemini，或使用 --cookies-file 提供可用 cookie")
-            sys.exit(1)
-        check_result = exporter.is_chat_updated(
-            normalize_chat_id(args.check_chat_id),
-            args.last_update_ts,
-        )
-        print(json.dumps(check_result, ensure_ascii=False, indent=2))
-        return
-
     if args.list_only:
         try:
             exporter.init_auth()
