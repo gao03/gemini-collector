@@ -760,6 +760,7 @@ function App() {
       const mergedConv = Number(r.mergedConversations ?? 0);
       const impMedia = Number(r.importedMedia ?? 0);
       const skipMedia = Number(r.skippedMedia ?? 0);
+      await reloadAccounts();
       await loadSummaries(accountId);
       setImportNotice({
         title: "导入完成",

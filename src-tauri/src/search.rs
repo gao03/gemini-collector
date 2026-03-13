@@ -228,7 +228,7 @@ pub fn index_conversation(
     Ok(())
 }
 
-/// 从 conversations 目录全量增量索引。
+/// 从 conversations 目录全量增量索引（不做 segment merge）。
 pub fn index_all(
     index: &Index,
     account_dir: &Path,
@@ -237,6 +237,9 @@ pub fn index_all(
     if !conversations_dir.exists() {
         return Ok(0);
     }
+
+    let t0 = std::time::Instant::now();
+    eprintln!("[index_all] start");
 
     let schema = index.schema();
     let conv_id_field = schema.get_field(F_CONV_ID).unwrap();
@@ -248,7 +251,9 @@ pub fn index_all(
 
     let mut file_ids: HashSet<String> = HashSet::new();
     let entries = std::fs::read_dir(conversations_dir).map_err(|e| e.to_string())?;
-    let mut count = 0u32;
+    let mut total = 0u32;
+    let mut indexed = 0u32;
+    let mut skipped = 0u32;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -258,11 +263,12 @@ pub fn index_all(
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
             let conv_id = stem.to_string();
             file_ids.insert(conv_id.clone());
+            total += 1;
 
             let mtime = file_mtime(&path);
             if let Some(&old) = mtimes.get(&conv_id) {
                 if (old - mtime).abs() < 0.001 {
-                    count += 1;
+                    skipped += 1;
                     continue;
                 }
             }
@@ -270,7 +276,7 @@ pub fn index_all(
             writer.delete_term(Term::from_field_text(conv_id_field, &conv_id));
             index_jsonl_into_writer(&mut writer, &schema, &conv_id, &path)?;
             mtimes.insert(conv_id, mtime);
-            count += 1;
+            indexed += 1;
         }
     }
 
@@ -280,27 +286,52 @@ pub fn index_all(
         .filter(|id| !file_ids.contains(id.as_str()))
         .cloned()
         .collect();
+    let deleted = removed.len();
     for id in &removed {
         writer.delete_term(Term::from_field_text(conv_id_field, id));
         mtimes.remove(id);
     }
 
+    eprintln!(
+        "[index_all] scan done: total={}, indexed={}, skipped={}, deleted={}, elapsed={}ms",
+        total, indexed, skipped, deleted, t0.elapsed().as_millis()
+    );
+
+    let t_commit = std::time::Instant::now();
     writer
         .commit()
         .map_err(|e| format!("提交索引失败: {}", e))?;
-
-    // 合并多个 segment 以减小体积
-    let seg_ids = index.searchable_segment_ids().unwrap_or_default();
-    if seg_ids.len() > 1 {
-        let _ = writer.merge(&seg_ids).wait();
-        writer.commit().map_err(|e| format!("合并提交失败: {}", e))?;
-        let _ = writer.garbage_collect_files().wait();
-    }
-    writer.wait_merging_threads().map_err(|e| format!("等待合并失败: {}", e))?;
+    eprintln!("[index_all] commit done: elapsed={}ms", t_commit.elapsed().as_millis());
 
     save_mtimes(account_dir, &mtimes)?;
 
-    Ok(count)
+    eprintln!(
+        "[index_all] complete: total={}, indexed={}, total_elapsed={}ms",
+        total, indexed, t0.elapsed().as_millis()
+    );
+
+    Ok(total)
+}
+
+/// 合并所有 segment，用于 rebuild 时清理碎片。
+pub fn merge_segments(index: &Index) -> Result<(), String> {
+    let seg_ids = index.searchable_segment_ids().unwrap_or_default();
+    let seg_count = seg_ids.len();
+    if seg_count <= 1 {
+        eprintln!("[merge_segments] skip: segments={}", seg_count);
+        return Ok(());
+    }
+    eprintln!("[merge_segments] start: segments={}", seg_count);
+    let t0 = std::time::Instant::now();
+    let mut writer: IndexWriter<TantivyDocument> = index
+        .writer(WRITER_HEAP)
+        .map_err(|e| format!("创建 writer 失败: {}", e))?;
+    let _ = writer.merge(&seg_ids).wait();
+    writer.commit().map_err(|e| format!("合并提交失败: {}", e))?;
+    let _ = writer.garbage_collect_files().wait();
+    writer.wait_merging_threads().map_err(|e| format!("等待合并失败: {}", e))?;
+    eprintln!("[merge_segments] done: segments={}, elapsed={}ms", seg_count, t0.elapsed().as_millis());
+    Ok(())
 }
 
 /// 删除单个对话的索引。
