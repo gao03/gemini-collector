@@ -28,19 +28,45 @@ _vendor_dir = Path(__file__).parent / "_vendor"
 if _vendor_dir.exists() and str(_vendor_dir) not in sys.path:
     sys.path.insert(0, str(_vendor_dir))
 
+
+def _evict_vendor():
+    """Remove _vendor from sys.path and purge any half-loaded vendor modules."""
+    vd = str(_vendor_dir)
+    while vd in sys.path:
+        sys.path.remove(vd)
+    for name in list(sys.modules):
+        mod = sys.modules[name]
+        origin = getattr(getattr(mod, "__spec__", None), "origin", "") or \
+                 getattr(mod, "__file__", "") or ""
+        if vd in origin:
+            del sys.modules[name]
+
+
+def _pip_install(package):
+    os.system(f"{sys.executable} -m pip install {package}")
+
+
 try:
     import httpx
-except ImportError:
-    print("缺少 httpx，正在安装...")
-    os.system(f"{sys.executable} -m pip install httpx")
-    import httpx
+except Exception:
+    _evict_vendor()
+    try:
+        import httpx
+    except ImportError:
+        print("缺少 httpx，正在安装...")
+        _pip_install("httpx")
+        import httpx
 
 try:
     import browser_cookie3
-except ImportError:
-    print("缺少 browser_cookie3，正在安装...")
-    os.system(f"{sys.executable} -m pip install browser-cookie3")
-    import browser_cookie3
+except Exception:
+    _evict_vendor()
+    try:
+        import browser_cookie3
+    except ImportError:
+        print("缺少 browser_cookie3，正在安装...")
+        _pip_install("browser-cookie3")
+        import browser_cookie3
 
 from gemini_protocol import (
     GEMINI_BASE, BATCH_SIZE, DETAIL_PAGE_SIZE,

@@ -1276,6 +1276,28 @@ fn import_account_zip_impl(data_dir: &Path, account_id: &str, zip_path: &Path) -
     let target_dir = data_dir.join("accounts").join(account_id);
     let result = do_import(&src_dir, &target_dir);
     let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    // 导入后更新 meta.json 中的 conversationCount
+    if result.is_ok() {
+        let conv_count = count_jsonl_files(&target_dir.join("conversations")).unwrap_or(0);
+        let meta_file = target_dir.join("meta.json");
+        if meta_file.exists() {
+            if let Ok(raw) = std::fs::read_to_string(&meta_file) {
+                if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if let Some(obj) = meta.as_object_mut() {
+                        obj.insert("conversationCount".to_string(), serde_json::json!(conv_count));
+                        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                        obj.insert("lastSyncAt".to_string(), serde_json::json!(now));
+                        obj.insert("lastSyncResult".to_string(), serde_json::json!("success"));
+                        if let Ok(serialized) = serde_json::to_string_pretty(&meta) {
+                            let _ = std::fs::write(&meta_file, serialized);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     result
 }
 
@@ -1289,23 +1311,18 @@ async fn import_account_zip(
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let zip = PathBuf::from(&zip_path);
 
+    let account_id_clone = account_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        import_account_zip_impl(&data_dir, &account_id, &zip)
+        import_account_zip_impl(&data_dir, &account_id_clone, &zip)
     })
     .await
     .map_err(|e| e.to_string())??;
 
     // 导入完成后重建搜索索引
-    let data_dir2 = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let account_id2 = serde_json::from_str::<serde_json::Value>(&result)
-        .ok()
-        .and_then(|v| v.get("accountId").and_then(|a| a.as_str()).map(|s| s.to_string()));
-    if let Some(aid) = account_id2 {
-        let account_dir = data_dir2.join("accounts").join(&aid);
-        let conversations_dir = account_dir.join("conversations");
-        if let Ok(index) = search::open_or_create_index(&account_dir) {
-            let _ = search::index_all(&index, &account_dir, &conversations_dir);
-        }
+    let account_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("accounts").join(&account_id);
+    let conversations_dir = account_dir.join("conversations");
+    if let Ok(index) = search::open_or_create_index(&account_dir) {
+        let _ = search::index_all(&index, &account_dir, &conversations_dir);
     }
 
     Ok(result)
@@ -1762,11 +1779,8 @@ fn search_conversations(
 ) -> Result<String, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let account_dir = data_dir.join("accounts").join(&account_id);
-    let conversations_dir = account_dir.join("conversations");
 
     let index = search::open_or_create_index(&account_dir)?;
-    // 确保索引是最新的
-    search::index_all(&index, &account_dir, &conversations_dir)?;
     let results = search::search_messages(&index, &query, limit.unwrap_or(50))?;
     serde_json::to_string(&results).map_err(|e| e.to_string())
 }
@@ -1789,6 +1803,7 @@ fn rebuild_search_index(app: tauri::AppHandle, account_id: String) -> Result<Str
 
     let index = search::open_or_create_index(&account_dir)?;
     let count = search::index_all(&index, &account_dir, &conversations_dir)?;
+    let _ = search::merge_segments(&index);
     Ok(serde_json::json!({ "indexed": count }).to_string())
 }
 
