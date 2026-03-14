@@ -200,7 +200,7 @@ impl WorkerHost {
 
     /// 刷新某个账号的 exporter session（重新读取 cookies）
     async fn refresh_session(self: &Arc<Self>, account_id: &str) -> Result<Arc<GeminiExporter>, String> {
-        eprintln!("session 过期，重建 exporter (account={})", account_id);
+        log::warn!("session 过期，重建 exporter (account={})", account_id);
 
         // 清空 cookie 缓存
         *self.cookies_cache.lock().await = None;
@@ -211,7 +211,7 @@ impl WorkerHost {
             .filter(|k| exporter.cookies.contains_key(**k))
             .copied()
             .collect();
-        eprintln!(
+        log::info!(
             "已从 Chrome 读取到 {} 个 cookies，关键字段: {:?}",
             exporter.cookies.len(),
             key_fields
@@ -223,7 +223,7 @@ impl WorkerHost {
             session.exporter.store(arc_exporter.clone());
         }
 
-        eprintln!("重建成功 ✓");
+        log::info!("重建成功 ✓");
         Ok(arc_exporter)
     }
 
@@ -244,7 +244,7 @@ impl WorkerHost {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     if is_session_expired_error(&e) && attempt < MAX_SESSION_RETRIES {
-                        eprintln!(
+                        log::warn!(
                             "第 {} 次 session 过期，正在重建: {}",
                             attempt + 1,
                             e
@@ -357,7 +357,7 @@ impl WorkerHost {
         let mut success_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut failed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        eprintln!("[sync_full] 开始全量同步: account={}", account_id);
+        log::info!("[sync_full] 开始全量同步: account={}", account_id);
 
         let items_before = load_conversation_items(&self.output_dir, account_id);
         let before_set: std::collections::HashSet<String> =
@@ -365,7 +365,7 @@ impl WorkerHost {
 
         // 1) 失败重试
         let retry_ids = collect_failed_conversation_ids(&self.output_dir, account_id, &items_before);
-        eprintln!("[retry_failed] 失败记录重试: {}", retry_ids.len());
+        log::info!("[retry_failed] 失败记录重试: {}", retry_ids.len());
         let retry_result = self
             .sync_conversation_batch(ctx, &retry_ids, "retry_failed", cancel)
             .await?;
@@ -376,7 +376,7 @@ impl WorkerHost {
             .into_iter()
             .filter(|id| !success_ids.contains(id))
             .collect();
-        eprintln!("[sync_empty] 空会话补齐: {}", empty_ids.len());
+        log::info!("[sync_empty] 空会话补齐: {}", empty_ids.len());
         let empty_result = self
             .sync_conversation_batch(ctx, &empty_ids, "sync_empty", cancel)
             .await?;
@@ -384,7 +384,7 @@ impl WorkerHost {
 
         // 3) 拉最新列表
         self.emit_job_state(ctx, "running", Some("refresh_list"), None, None);
-        eprintln!("[refresh_list] 拉取最新列表");
+        log::info!("[refresh_list] 拉取最新列表");
         let list_result = self.execute_sync_list(ctx, true, cancel).await?;
         let after_ids = load_conversation_ids(&load_conversation_items(
             &self.output_dir,
@@ -405,7 +405,7 @@ impl WorkerHost {
             .filter(|id| !before_set.contains(*id) && !success_ids.contains(*id))
             .cloned()
             .collect();
-        eprintln!("[sync_new] 新增会话同步: {}", new_ids.len());
+        log::info!("[sync_new] 新增会话同步: {}", new_ids.len());
         let new_result = self
             .sync_conversation_batch(ctx, &new_ids, "sync_new", cancel)
             .await?;
@@ -421,7 +421,7 @@ impl WorkerHost {
             })
             .cloned()
             .collect();
-        eprintln!(
+        log::info!(
             "[sync_old] 剩余老会话检查更新: {}",
             remaining_old_ids.len()
         );
@@ -438,7 +438,7 @@ impl WorkerHost {
             Some(json!({"current": total, "total": total})),
             None,
         );
-        eprintln!(
+        log::info!(
             "[sync_full] 全量同步结束: total={}, failed={}",
             total,
             failed_ids.len()
@@ -474,7 +474,7 @@ impl WorkerHost {
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
 
-        eprintln!("[{}] 进度: 0/{}", phase, total);
+        log::info!("[{}] 进度: 0/{}", phase, total);
 
         for (idx, cid) in conv_ids.iter().enumerate() {
             let t_conv = std::time::Instant::now();
@@ -545,7 +545,7 @@ impl WorkerHost {
                 None,
             );
 
-            eprintln!(
+            log::info!(
                 "[{}] 进度: {}/{} ok={} fail={} cid={} {}ms",
                 phase, idx + 1, total, succeeded.len(), failed.len(), cid,
                 t_conv.elapsed().as_millis()
@@ -577,7 +577,7 @@ impl WorkerHost {
 
         // 2) 同步有更新的会话
         if !updated_ids.is_empty() {
-            eprintln!(
+            log::info!(
                 "[sync_incremental] 需要更新 {} 个会话",
                 updated_ids.len()
             );
@@ -590,7 +590,7 @@ impl WorkerHost {
         let items = load_conversation_items(&self.output_dir, account_id);
         let empty_ids: Vec<String> = collect_empty_conversation_ids(&items);
         if !empty_ids.is_empty() {
-            eprintln!("[sync_incremental] 补齐 {} 个空会话", empty_ids.len());
+            log::info!("[sync_incremental] 补齐 {} 个空会话", empty_ids.len());
             let _ = self
                 .sync_conversation_batch(ctx, &empty_ids, "sync_empty", cancel)
                 .await?;
@@ -659,11 +659,11 @@ impl WorkerHost {
                     host.emit_job_state(&ctx, "done", None, done_progress, None);
                 }
                 Err(ref e) if cancel.is_cancelled() || is_cancelled_error(e) => {
-                    eprintln!("任务被用户取消: {}", e);
+                    log::warn!("任务被用户取消: {}", e);
                     host.emit_job_state(&ctx, "cancelled", None, None, None);
                 }
                 Err(ref e) if is_backoff_limit_error(e) => {
-                    eprintln!("任务因退避兜底提前结束: {}", e);
+                    log::warn!("任务因退避兜底提前结束: {}", e);
                     host.emit_job_state(
                         &ctx,
                         "failed",
@@ -673,7 +673,7 @@ impl WorkerHost {
                     );
                 }
                 Err(ref e) => {
-                    eprintln!("任务失败: {}", e);
+                    log::error!("任务失败: {}", e);
                     host.emit_job_state(
                         &ctx,
                         "failed",
@@ -697,7 +697,7 @@ impl WorkerHost {
         let cancels = self.active_cancels.lock().await;
         if let Some(token) = cancels.get(account_id) {
             token.cancel();
-            eprintln!("已发送取消信号: account={}", account_id);
+            log::info!("已发送取消信号: account={}", account_id);
         }
     }
 

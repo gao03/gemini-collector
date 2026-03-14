@@ -186,13 +186,13 @@ fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
             } else {
                 stderr
             };
-            eprintln!("[export_account_zip] ditto 打包失败，尝试 zip 兜底: {}", reason);
+            log::warn!("[export_account_zip] ditto 打包失败，尝试 zip 兜底: {}", reason);
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("[export_account_zip] 系统无 ditto，尝试 zip 兜底");
+            log::warn!("[export_account_zip] 系统无 ditto，尝试 zip 兜底");
         }
         Err(err) => {
-            eprintln!("[export_account_zip] ditto 执行异常，尝试 zip 兜底: {}", err);
+            log::warn!("[export_account_zip] ditto 执行异常，尝试 zip 兜底: {}", err);
         }
     }
 

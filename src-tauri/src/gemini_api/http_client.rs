@@ -173,8 +173,8 @@ impl GeminiExporter {
             if !started && !probe_consumed {
                 // 首次放行探测请求
                 self.limit_probe_consumed.store(true, Ordering::Relaxed);
-                eprintln!(
-                    "  [backoff] 连续失败达到上限，放行一次启动探测请求: failures={}, op={}",
+                log::warn!(
+                    "[backoff] 连续失败达到上限，放行一次启动探测请求: failures={}, op={}",
                     failures, label
                 );
             } else {
@@ -198,8 +198,8 @@ impl GeminiExporter {
         // 退避等待
         if backoff_sec > 0.0 && backoff_sec < REQUEST_BACKOFF_MAX_SECONDS {
             self.sync_request_state_file();
-            eprintln!(
-                "  [backoff] 连续失败退避等待: failures={}, wait={:.2}s, op={}",
+            log::warn!(
+                "[backoff] 连续失败退避等待: failures={}, wait={:.2}s, op={}",
                 failures, backoff_sec, label
             );
             tokio::time::sleep(std::time::Duration::from_secs_f64(backoff_sec)).await;

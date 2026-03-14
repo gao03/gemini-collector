@@ -78,7 +78,7 @@ impl GeminiExporter {
         std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
         self.set_request_state_scope(account_dir.clone());
 
-        eprintln!("仅同步列表到: {}", account_dir.display());
+        log::info!("仅同步列表到: {}", account_dir.display());
 
         let (existing_order, existing_index) = storage::load_conversations_index(&account_dir);
         let sync_state = storage::load_sync_state(&account_dir);
@@ -116,13 +116,13 @@ impl GeminiExporter {
         }
 
         if resume_cursor.is_some() {
-            eprintln!("检测到上次列表同步中断，继续从 cursor 拉取...");
+            log::info!("检测到上次列表同步中断，继续从 cursor 拉取...");
         } else {
             let failures = self.request_consecutive_failures.load(std::sync::atomic::Ordering::Relaxed);
             if failures > 0 {
-                eprintln!("检测到列表请求连续失败，按失败计数从第一页重试...");
+                log::info!("检测到列表请求连续失败，按失败计数从第一页重试...");
             } else {
-                eprintln!("从第一页开始拉取列表...");
+                log::info!("从第一页开始拉取列表...");
             }
             fetched_order.clear();
             fetched_seen.clear();
@@ -178,7 +178,7 @@ impl GeminiExporter {
                     if r_ts > l_ts {
                         updated_ids.push(bare_id.clone());
                     } else if stop_on_unchanged && r_ts == l_ts {
-                        eprintln!("  [stop] 命中未更新会话，停止列表扫描: {}", bare_id);
+                        log::info!("  [stop] 命中未更新会话，停止列表扫描: {}", bare_id);
                         stop_early = true;
                         break;
                     }
@@ -193,7 +193,7 @@ impl GeminiExporter {
                 return Err("用户取消列表同步".to_string());
             }
 
-            eprintln!(
+            log::info!(
                 "  第 {} 页: {} 个对话 (累计 {}) {}ms",
                 page,
                 chats.len(),
@@ -247,12 +247,12 @@ impl GeminiExporter {
         )?;
 
         if stop_early {
-            eprintln!(
+            log::info!(
                 "列表同步完成（提前终止）: 共 {} 个对话",
                 fetched_order.len()
             );
         } else {
-            eprintln!("列表同步完成: 共 {} 个对话", fetched_order.len());
+            log::info!("列表同步完成: 共 {} 个对话", fetched_order.len());
         }
 
         Ok(ListSyncResult {
@@ -554,7 +554,7 @@ impl GeminiExporter {
             "full"
         };
 
-        eprintln!("同步单会话: {}", conv_id);
+        log::info!("同步单会话: {}", conv_id);
 
         // 失败媒体重试
         let mut pre_stats = DownloadStats::default();
@@ -562,7 +562,7 @@ impl GeminiExporter {
             .retry_failed_media_for_conversation(&jsonl_file, &account_dir, &media_dir, &mut pre_stats)
             .await;
         if retry_result.attempted > 0 || retry_result.missing_url > 0 {
-            eprintln!(
+            log::info!(
                 "  [media-retry] attempted={}, recovered={}, failed={}, missing_url={}",
                 retry_result.attempted, retry_result.recovered, retry_result.failed, retry_result.missing_url
             );
@@ -604,7 +604,7 @@ impl GeminiExporter {
 
         let (raw_turns, removed_turns) = storage::dedupe_raw_turns_by_id(&raw_turns);
         if removed_turns > 0 {
-            eprintln!("  [dedupe] 分页结果去重: {} 个重复 turn", removed_turns);
+            log::info!("  [dedupe] 分页结果去重: {} 个重复 turn", removed_turns);
         }
 
         if cancel.is_cancelled() {
@@ -713,7 +713,7 @@ impl GeminiExporter {
         }
         storage::write_sync_state(&account_dir, &state).map_err(|e| e.to_string())?;
 
-        eprintln!("单会话完成: {}", conv_id);
+        log::info!("单会话完成: {}", conv_id);
 
         Ok(ConvSyncResult {
             conversation_id: conv_id,
@@ -738,7 +738,7 @@ impl GeminiExporter {
         existing_status: &str,
         cancel: &CancellationToken,
     ) -> Result<Value, String> {
-        eprintln!("  轮次: {}", raw_turns.len());
+        log::info!("  轮次: {}", raw_turns.len());
 
         let mut parsed_turns: Vec<Value> = raw_turns
             .iter()
@@ -758,7 +758,7 @@ impl GeminiExporter {
 
         let mut failed_items = Vec::new();
         if !batch_list.is_empty() {
-            eprintln!("  媒体文件: {} 个（去重后）", batch_list.len());
+            log::info!("  媒体文件: {} 个（去重后）", batch_list.len());
             failed_items = self.download_media_batch(&batch_list, media_stats).await;
             storage::save_media_manifest(account_dir, global_seen_urls)
                 .map_err(|e| e.to_string())?;
@@ -864,7 +864,7 @@ impl GeminiExporter {
             storage::merge_message_rows_for_write(new_msg_rows, &existing_msg_rows)
                 .map_err(|e| e.to_string())?;
         if removed_msg_rows > 0 {
-            eprintln!("  [dedupe] 合并写盘去重: {} 行", removed_msg_rows);
+            log::info!("  [dedupe] 合并写盘去重: {} 行", removed_msg_rows);
         }
 
         let mut meta = new_meta.clone();
@@ -880,7 +880,7 @@ impl GeminiExporter {
 
         let mut failed_items = Vec::new();
         if !batch_list.is_empty() {
-            eprintln!("  媒体文件: {} 个（去重后）", batch_list.len());
+            log::info!("  媒体文件: {} 个（去重后）", batch_list.len());
             failed_items = self.download_media_batch(&batch_list, media_stats).await;
             storage::save_media_manifest(account_dir, global_seen_urls)
                 .map_err(|e| e.to_string())?;
@@ -903,7 +903,7 @@ impl GeminiExporter {
             return Err("用户取消单会话同步".to_string());
         }
 
-        eprintln!("  新增 turn: {}", raw_turns.len());
+        log::info!("  新增 turn: {}", raw_turns.len());
         build_conversation_summary(jsonl_file, bare_id, title, &all_rows, existing_status)
     }
 }

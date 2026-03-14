@@ -239,7 +239,7 @@ pub fn index_all(
     }
 
     let t0 = std::time::Instant::now();
-    eprintln!("[index_all] start");
+    log::info!("[index_all] start");
 
     let schema = index.schema();
     let conv_id_field = schema.get_field(F_CONV_ID).unwrap();
@@ -292,7 +292,7 @@ pub fn index_all(
         mtimes.remove(id);
     }
 
-    eprintln!(
+    log::info!(
         "[index_all] scan done: total={}, indexed={}, skipped={}, deleted={}, elapsed={}ms",
         total, indexed, skipped, deleted, t0.elapsed().as_millis()
     );
@@ -301,11 +301,11 @@ pub fn index_all(
     writer
         .commit()
         .map_err(|e| format!("提交索引失败: {}", e))?;
-    eprintln!("[index_all] commit done: elapsed={}ms", t_commit.elapsed().as_millis());
+    log::info!("[index_all] commit done: elapsed={}ms", t_commit.elapsed().as_millis());
 
     save_mtimes(account_dir, &mtimes)?;
 
-    eprintln!(
+    log::info!(
         "[index_all] complete: total={}, indexed={}, total_elapsed={}ms",
         total, indexed, t0.elapsed().as_millis()
     );
@@ -318,10 +318,10 @@ pub fn merge_segments(index: &Index) -> Result<(), String> {
     let seg_ids = index.searchable_segment_ids().unwrap_or_default();
     let seg_count = seg_ids.len();
     if seg_count <= 1 {
-        eprintln!("[merge_segments] skip: segments={}", seg_count);
+        log::info!("[merge_segments] skip: segments={}", seg_count);
         return Ok(());
     }
-    eprintln!("[merge_segments] start: segments={}", seg_count);
+    log::info!("[merge_segments] start: segments={}", seg_count);
     let t0 = std::time::Instant::now();
     let mut writer: IndexWriter<TantivyDocument> = index
         .writer(WRITER_HEAP)
@@ -330,7 +330,7 @@ pub fn merge_segments(index: &Index) -> Result<(), String> {
     writer.commit().map_err(|e| format!("合并提交失败: {}", e))?;
     let _ = writer.garbage_collect_files().wait();
     writer.wait_merging_threads().map_err(|e| format!("等待合并失败: {}", e))?;
-    eprintln!("[merge_segments] done: segments={}, elapsed={}ms", seg_count, t0.elapsed().as_millis());
+    log::info!("[merge_segments] done: segments={}, elapsed={}ms", seg_count, t0.elapsed().as_millis());
     Ok(())
 }
 

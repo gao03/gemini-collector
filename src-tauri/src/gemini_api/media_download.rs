@@ -130,8 +130,8 @@ impl GeminiExporter {
                         media_type,
                         media_hint,
                     );
-                    eprintln!(
-                        "  [media-fail] 下载异常: {} | media={} domain={}",
+                    log::warn!(
+                        "[media-fail] 下载异常: {} | media={} domain={}",
                         e, fields.media, fields.domain
                     );
                     return Ok(None);
@@ -158,8 +158,8 @@ impl GeminiExporter {
                     }
                     None => {
                         self.mark_request_failure();
-                        eprintln!(
-                            "  [media-fail] 重定向缺少 location | media={} domain={}",
+                        log::warn!(
+                            "[media-fail] 重定向缺少 location | media={} domain={}",
                             fields.media, fields.domain
                         );
                         return Ok(None);
@@ -174,8 +174,8 @@ impl GeminiExporter {
             }
 
             self.mark_request_failure();
-            eprintln!(
-                "  [media-fail] 非200状态码={} | media={} domain={}",
+            log::warn!(
+                "[media-fail] 非200状态码={} | media={} domain={}",
                 status.as_u16(),
                 fields.media,
                 fields.domain
@@ -185,8 +185,8 @@ impl GeminiExporter {
 
         self.mark_request_failure();
         let fields = media_log_fields(Some(url), media_type, media_hint);
-        eprintln!(
-            "  [media-fail] 重定向次数超限 | media={} domain={}",
+        log::warn!(
+            "[media-fail] 重定向次数超限 | media={} domain={}",
             fields.media, fields.domain
         );
         Ok(None)
@@ -254,7 +254,7 @@ impl GeminiExporter {
                     let _ = std::fs::create_dir_all(parent);
                 }
                 if let Err(e) = std::fs::write(&item.filepath, &bytes) {
-                    eprintln!("  [media-fail] 写入文件失败: {} - {}", item.filepath.display(), e);
+                    log::error!("[media-fail] 写入文件失败: {} - {}", item.filepath.display(), e);
                     stats.media_failed += 1;
                     failed_items.push(FailedDownloadItem {
                         media_id: item.media_id.clone(),
@@ -264,8 +264,8 @@ impl GeminiExporter {
                 } else {
                     let size_mb = bytes.len() as f64 / (1024.0 * 1024.0);
                     let fields = media_log_fields(Some(&item.url), item.media_type.as_deref(), Some(item.media_id.as_str()));
-                    eprintln!(
-                        "  [media] ok: {} {:.2}MB media={} domain={} {}ms",
+                    log::info!(
+                        "[media] ok: {} {:.2}MB media={} domain={} {}ms",
                         item.media_id,
                         size_mb,
                         fields.media,
@@ -276,8 +276,8 @@ impl GeminiExporter {
                 }
             } else {
                 let fields = media_log_fields(Some(&item.url), media_type, media_hint);
-                eprintln!(
-                    "  [media-fail] 媒体下载失败，已跳过: {} | media={} domain={}",
+                log::warn!(
+                    "[media-fail] 媒体下载失败，已跳过: {} | media={} domain={}",
                     item.filepath.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
                     fields.media,
                     fields.domain

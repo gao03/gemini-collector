@@ -659,7 +659,7 @@ fn load_conversation_detail(
             "本地会话数据有 {} 行解析失败{}，已跳过。建议点击该会话右侧同步按钮修复。",
             parse_error_count, sample_line_str
         );
-        eprintln!(
+        log::warn!(
             "[load_conversation_detail] account={} conversation={} parse_errors={} lines={:?}",
             account_id, bare_id, parse_error_count, parse_error_lines
         );
@@ -736,6 +736,12 @@ fn load_conversation_detail(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .max_file_size(5_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
