@@ -32,7 +32,6 @@ impl CancellationToken {
 
 use crate::gemini_api::media_download::DownloadStats;
 use crate::gemini_api::GeminiExporter;
-use crate::media::ensure_video_previews_from_turns_values as ensure_video_previews_from_turns;
 use crate::protocol::{coerce_epoch_seconds, summary_to_epoch_seconds};
 use crate::storage;
 use crate::turn_parser;
@@ -823,8 +822,6 @@ impl GeminiExporter {
                 .map_err(|e| e.to_string())?;
         }
 
-        let _preview_stats = ensure_video_previews_from_turns(&parsed_turns, media_dir);
-
         // 更新媒体失败标记
         let batch_media_ids: HashSet<String> = batch_list.iter().map(|i| i.media_id.clone()).collect();
         let failed_map: HashMap<String, String> = failed_items
@@ -944,8 +941,6 @@ impl GeminiExporter {
             storage::save_media_manifest(account_dir, global_seen_urls)
                 .map_err(|e| e.to_string())?;
         }
-
-        let _preview_stats = ensure_video_previews_from_turns(&parsed_new_turns, media_dir);
 
         let batch_media_ids: HashSet<String> = batch_list.iter().map(|i| i.media_id.clone()).collect();
         let failed_map: HashMap<String, String> = failed_items
