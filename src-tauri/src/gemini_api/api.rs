@@ -86,11 +86,11 @@ fn title_re() -> &'static Regex {
 impl GeminiExporter {
     /// 从 Gemini 页面提取认证参数 (at, bl, f.sid)。
     pub async fn init_auth(&mut self) -> Result<(), String> {
-        eprintln!("获取认证参数...");
+        log::info!("获取认证参数...");
         self.ensure_authuser().await?; // 对应 Python _authuser_params() 的懒解析
         let params = self.authuser_params();
         if let Some(ref au) = self.authuser {
-            eprintln!("  使用 authuser: {}", au);
+            log::info!("  使用 authuser: {}", au);
             let _ = &params; // already includes authuser
         }
 
@@ -173,7 +173,7 @@ impl GeminiExporter {
                     if item.email == email {
                         if let Some(ref au) = item.authuser {
                             self.authuser = Some(au.clone());
-                            eprintln!("  authuser: {} (ListAccounts 映射)", au);
+                            log::info!("  authuser: {} (ListAccounts 映射)", au);
                             return Ok(());
                         }
                     }
@@ -198,7 +198,7 @@ impl GeminiExporter {
                     let text = resp.text().await.unwrap_or_default();
                     if text.to_lowercase().contains(&email) {
                         self.authuser = Some(idx.to_string());
-                        eprintln!("  authuser: {} (邮箱匹配)", idx);
+                        log::info!("  authuser: {} (邮箱匹配)", idx);
                         return Ok(());
                     }
                 }
@@ -208,7 +208,7 @@ impl GeminiExporter {
 
         // 无法匹配索引时，直接透传
         self.authuser = Some(user_spec);
-        eprintln!("  [warn] 未匹配到邮箱对应索引，改为直接使用邮箱作为 authuser");
+        log::warn!("未匹配到邮箱对应索引，改为直接使用邮箱作为 authuser");
         Ok(())
     }
 
@@ -283,7 +283,7 @@ impl GeminiExporter {
 
     /// 获取所有聊天列表（含分页）。
     pub async fn get_all_chats(&self) -> Result<Vec<ChatListItem>, String> {
-        eprintln!("获取聊天列表...");
+        log::info!("获取聊天列表...");
         let mut all_chats = Vec::new();
         let mut page = 0u32;
         let mut cursor: Option<String> = None;
@@ -295,14 +295,14 @@ impl GeminiExporter {
 
             if items.is_empty() && next_token.is_none() {
                 if page == 1 {
-                    eprintln!("  [debug] 首屏未拿到聊天列表");
+                    log::debug!("首屏未拿到聊天列表");
                 }
                 break;
             }
 
             let count = items.len();
             all_chats.extend(items);
-            eprintln!(
+            log::info!(
                 "  第 {} 页: {} 个对话 (累计 {})",
                 page,
                 count,
@@ -315,7 +315,7 @@ impl GeminiExporter {
             }
         }
 
-        eprintln!("  共 {} 个对话", all_chats.len());
+        log::info!("  共 {} 个对话", all_chats.len());
         Ok(all_chats)
     }
 

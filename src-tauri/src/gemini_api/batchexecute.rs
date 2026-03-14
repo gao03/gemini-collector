@@ -120,7 +120,7 @@ impl GeminiExporter {
         if !status.is_success() {
             self.mark_request_failure();
             let preview: String = resp_text.chars().take(500).collect();
-            eprintln!("  [debug] HTTP {} 响应内容: {}", status.as_u16(), preview);
+            log::debug!("HTTP {} 响应内容: {}", status.as_u16(), preview);
             return Err(format!("batchexecute 失败: HTTP {}", status.as_u16()));
         }
 

@@ -64,8 +64,8 @@ pub fn read_chrome_cookies(
             match chrome_decrypt::decrypt_chrome_cookie_value(&encrypted_value, &key) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!(
-                        "  [warn] decrypt failed for cookie '{}' on {}: {}",
+                    log::warn!(
+                        "decrypt failed for cookie '{}' on {}: {}",
                         name, domain, e
                     );
                     continue;
@@ -148,14 +148,14 @@ fn tempfile_copy(src: &Path) -> Result<std::path::PathBuf> {
 /// High-level: discover browsers, read & decrypt, select preferred Google cookies.
 /// On failure, performs Keychain diagnostics (macOS) and outputs actionable hints.
 pub fn get_cookies_from_local_browser() -> Result<HashMap<String, String>> {
-    eprintln!("尝试从本机浏览器读取 cookies...");
+    log::info!("尝试从本机浏览器读取 cookies...");
 
     let (entries, permission_issues) = discover::discover_chrome_cookie_files();
 
     if !permission_issues.is_empty() {
-        eprintln!("[!] 检测到权限问题:");
+        log::warn!("检测到权限问题:");
         for issue in &permission_issues {
-            eprintln!("    {}", issue);
+            log::warn!("  {}", issue);
         }
     }
 
@@ -175,31 +175,31 @@ pub fn get_cookies_from_local_browser() -> Result<HashMap<String, String>> {
                     .collect();
                 let selected = domain::select_preferred_google_cookies(&items);
                 if selected.is_empty() {
-                    eprintln!("  - {}: 未读取到可用 cookie", label);
+                    log::info!("  - {}: 未读取到可用 cookie", label);
                     continue;
                 }
                 if key_cookies.iter().any(|k| selected.contains_key(*k)) {
-                    eprintln!(
+                    log::info!(
                         "  - {}: 成功读取 {} 个 cookies",
                         label,
                         selected.len()
                     );
                     return Ok(selected);
                 }
-                eprintln!(
+                log::warn!(
                     "  - {}: 已读取 {} 个 cookies，但缺少关键登录态",
                     label,
                     selected.len()
                 );
             }
             Err(e) => {
-                eprintln!("  - {}: 读取失败 ({})", label, e);
+                log::warn!("  - {}: 读取失败 ({})", label, e);
             }
         }
     }
 
     if entries.is_empty() {
-        eprintln!("  未发现已知 cookie 文件");
+        log::warn!("未发现已知 cookie 文件");
     }
 
     // ── Keychain 事后诊断（仅 macOS，仅在找到了 cookie 文件但读取失败时） ──
@@ -208,10 +208,10 @@ pub fn get_cookies_from_local_browser() -> Result<HashMap<String, String>> {
         let kc_diags = keychain_diag::diagnose_keychain_for_browsers(&browser_names);
         for diag in &kc_diags {
             if !diag.accessible {
-                eprintln!("[!] {}", diag.detail);
+                log::warn!("{}", diag.detail);
                 if !diag.suggestion.is_empty() {
                     for line in diag.suggestion.lines() {
-                        eprintln!("    {}", line);
+                        log::warn!("  {}", line);
                     }
                 }
             }

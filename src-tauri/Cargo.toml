@@ -55,6 +55,8 @@ rand = "0.9"
 
 # worker / export_cli module dependencies
 arc-swap = "1"
+log = "0.4"
+tauri-plugin-log = "2"
 
 # cookie-verify binary needs a tokio runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
