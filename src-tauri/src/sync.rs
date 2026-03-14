@@ -136,6 +136,7 @@ impl GeminiExporter {
 
         loop {
             page += 1;
+            let t_page = std::time::Instant::now();
             let (chats, next_cursor) = self.get_chats_page(cursor.as_deref()).await?;
 
             if chats.is_empty() && next_cursor.is_none() {
@@ -193,10 +194,11 @@ impl GeminiExporter {
             }
 
             eprintln!(
-                "  第 {} 页: {} 个对话 (累计 {})",
+                "  第 {} 页: {} 个对话 (累计 {}) {:.1}s",
                 page,
                 chats.len(),
-                fetched_order.len()
+                fetched_order.len(),
+                t_page.elapsed().as_secs_f64()
             );
 
             // 每页落盘

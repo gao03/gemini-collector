@@ -220,6 +220,8 @@ impl GeminiExporter {
                 continue;
             }
 
+            let t_media = std::time::Instant::now();
+
             // 带 authuser 的 URL
             let candidates = match &authuser {
                 Some(au) => vec![append_authuser(&item.url, au)],
@@ -260,6 +262,15 @@ impl GeminiExporter {
                         error: format!("write_failed: {}", e),
                     });
                 } else {
+                    let fields = media_log_fields(Some(&item.url), item.media_type.as_deref(), Some(item.media_id.as_str()));
+                    eprintln!(
+                        "  [media] ok: {} {}B media={} domain={} {:.1}s",
+                        item.media_id,
+                        bytes.len(),
+                        fields.media,
+                        fields.domain,
+                        t_media.elapsed().as_secs_f64()
+                    );
                     stats.media_downloaded += 1;
                 }
             } else {

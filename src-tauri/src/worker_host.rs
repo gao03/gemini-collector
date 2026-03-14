@@ -477,6 +477,7 @@ impl WorkerHost {
         eprintln!("[{}] 进度: 0/{}", phase, total);
 
         for (idx, cid) in conv_ids.iter().enumerate() {
+            let t_conv = std::time::Instant::now();
             let sub_ctx = JobContext {
                 job_id: format!("{}:conv:{}:{}", parent_ctx.job_id, phase, cid),
                 job_type: "sync_conversation".to_string(),
@@ -545,8 +546,9 @@ impl WorkerHost {
             );
 
             eprintln!(
-                "[{}] 进度: {}/{} ok={} fail={} cid={}",
-                phase, idx + 1, total, succeeded.len(), failed.len(), cid
+                "[{}] 进度: {}/{} ok={} fail={} cid={} {:.1}s",
+                phase, idx + 1, total, succeeded.len(), failed.len(), cid,
+                t_conv.elapsed().as_secs_f64()
             );
         }
 
