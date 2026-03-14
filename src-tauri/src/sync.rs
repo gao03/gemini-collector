@@ -588,19 +588,78 @@ impl GeminiExporter {
         });
         let title = chat_info["title"].as_str().unwrap_or(&bare_id).to_string();
 
-        // 抓取详情
+        // 抓取详情（逐页拉取，每页更新索引中的条数）
         let existing_turn_ids = if local_jsonl_exists {
             storage::build_existing_turn_id_set_new(&jsonl_file)
         } else {
             HashSet::new()
         };
+        let is_incremental = detail_mode == "incremental";
 
-        let raw_turns = if detail_mode == "incremental" {
-            self.get_chat_detail_incremental(&conv_id, &existing_turn_ids)
-                .await?
-        } else {
-            self.get_chat_detail(&conv_id).await?
-        };
+        // 已有消息数（用于增量模式的基数）
+        let existing_msg_count = existing_summary
+            .get("messageCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
+        let mut raw_turns: Vec<Value> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut page_num = 0u32;
+
+        loop {
+            if cancel.is_cancelled() {
+                return Err("用户取消单会话同步".to_string());
+            }
+
+            let (page_turns, next_cursor) = self
+                .get_chat_detail_page(&conv_id, cursor.as_deref())
+                .await?;
+
+            if page_turns.is_empty() && next_cursor.is_none() {
+                break;
+            }
+
+            // 增量模式：遇到已有 turn 即停止
+            let mut hit_existing = false;
+            if is_incremental {
+                for turn in &page_turns {
+                    let tid = storage::turn_id_from_raw_pub(turn);
+                    if let Some(ref tid) = tid {
+                        if existing_turn_ids.contains(tid) {
+                            hit_existing = true;
+                            break;
+                        }
+                    }
+                    raw_turns.push(turn.clone());
+                }
+            } else {
+                raw_turns.extend(page_turns);
+            }
+
+            page_num += 1;
+
+            // 每页拉取后更新索引中的消息条数（粗估：每个 turn ≈ 2 条消息行）
+            if page_num > 1 || hit_existing {
+                let estimated_count = if is_incremental {
+                    existing_msg_count + raw_turns.len() * 2
+                } else {
+                    raw_turns.len() * 2
+                };
+                update_intermediate_message_count(
+                    &account_dir, &account_id, &bare_id,
+                    &existing_index, estimated_count, &existing_summary,
+                );
+            }
+
+            if hit_existing {
+                break;
+            }
+
+            match next_cursor {
+                Some(t) => cursor = Some(t),
+                None => break,
+            }
+        }
 
         let (raw_turns, removed_turns) = storage::dedupe_raw_turns_by_id(&raw_turns);
         if removed_turns > 0 {
@@ -984,4 +1043,30 @@ fn updated_sort_num(summary: &Value) -> f64 {
                 .map(|dt| dt.timestamp() as f64)
         })
         .unwrap_or(0.0)
+}
+
+/// 每页拉取后，更新索引中该会话的 messageCount（粗估值），让前端轮询及时看到进度。
+fn update_intermediate_message_count(
+    account_dir: &Path,
+    account_id: &str,
+    bare_id: &str,
+    existing_index: &HashMap<String, Value>,
+    estimated_count: usize,
+    existing_summary: &Value,
+) {
+    let mut updated = existing_summary.clone();
+    if let Some(obj) = updated.as_object_mut() {
+        obj.insert("id".into(), json!(bare_id));
+        obj.insert("messageCount".into(), json!(estimated_count));
+    }
+    let mut merged = existing_index.clone();
+    merged.insert(bare_id.to_string(), updated);
+    let mut summaries: Vec<Value> = merged.values().cloned().collect();
+    summaries.sort_by(|a, b| {
+        let ts_a = updated_sort_num(a);
+        let ts_b = updated_sort_num(b);
+        ts_b.partial_cmp(&ts_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let _ = storage::write_conversations_index(account_dir, account_id, &now_iso, &summaries);
 }
