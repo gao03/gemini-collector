@@ -546,9 +546,9 @@ impl WorkerHost {
             );
 
             eprintln!(
-                "[{}] 进度: {}/{} ok={} fail={} cid={} {:.1}s",
+                "[{}] 进度: {}/{} ok={} fail={} cid={} {}ms",
                 phase, idx + 1, total, succeeded.len(), failed.len(), cid,
-                t_conv.elapsed().as_secs_f64()
+                t_conv.elapsed().as_millis()
             );
         }
 

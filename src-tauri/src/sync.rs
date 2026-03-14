@@ -76,7 +76,7 @@ impl GeminiExporter {
 
         std::fs::create_dir_all(&conv_dir).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
-        self.set_request_state_scope(account_dir.clone()).await;
+        self.set_request_state_scope(account_dir.clone());
 
         eprintln!("仅同步列表到: {}", account_dir.display());
 
@@ -194,11 +194,11 @@ impl GeminiExporter {
             }
 
             eprintln!(
-                "  第 {} 页: {} 个对话 (累计 {}) {:.1}s",
+                "  第 {} 页: {} 个对话 (累计 {}) {}ms",
                 page,
                 chats.len(),
                 fetched_order.len(),
-                t_page.elapsed().as_secs_f64()
+                t_page.elapsed().as_millis()
             );
 
             // 每页落盘
@@ -542,7 +542,7 @@ impl GeminiExporter {
 
         std::fs::create_dir_all(&conv_dir).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
-        self.set_request_state_scope(account_dir.clone()).await;
+        self.set_request_state_scope(account_dir.clone());
 
         let conv_id = crate::protocol::normalize_chat_id(conversation_id);
         let bare_id = conv_id.replace("c_", "");
@@ -764,11 +764,7 @@ impl GeminiExporter {
                 .map_err(|e| e.to_string())?;
         }
 
-        let preview_stats = ensure_video_previews_from_turns(&parsed_turns, media_dir);
-        eprintln!(
-            "  预览生成: {}✓ {}✗",
-            preview_stats.preview_generated, preview_stats.preview_failed
-        );
+        let _preview_stats = ensure_video_previews_from_turns(&parsed_turns, media_dir);
 
         // 更新媒体失败标记
         let batch_media_ids: HashSet<String> = batch_list.iter().map(|i| i.media_id.clone()).collect();
@@ -890,8 +886,7 @@ impl GeminiExporter {
                 .map_err(|e| e.to_string())?;
         }
 
-        let preview_stats = ensure_video_previews_from_turns(&parsed_new_turns, media_dir);
-        let _ = preview_stats;
+        let _preview_stats = ensure_video_previews_from_turns(&parsed_new_turns, media_dir);
 
         let batch_media_ids: HashSet<String> = batch_list.iter().map(|i| i.media_id.clone()).collect();
         let failed_map: HashMap<String, String> = failed_items
