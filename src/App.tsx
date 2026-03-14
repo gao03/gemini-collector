@@ -1296,7 +1296,7 @@ function App() {
           </div>
         </div>
       )}
-      {(exportingAccountData || preparingExportData) && (
+      {(exportingAccountData || preparingExportData || importingAccountData) && (
         <>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           <div
@@ -1331,7 +1331,7 @@ function App() {
                 }}
               />
               <div style={{ marginTop: 14, fontSize: 14, color: theme.text }}>
-                {preparingExportData ? "正在读取数据…" : "导出中，请勿关闭…"}
+                {importingAccountData ? "导入中，请勿关闭…" : preparingExportData ? "正在读取数据…" : "导出中，请勿关闭…"}
               </div>
             </div>
           </div>
