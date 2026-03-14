@@ -106,7 +106,7 @@ impl GeminiExporter {
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                self.mark_request_failure().await;
+                self.mark_request_failure();
                 return Err(e);
             }
         };
@@ -118,7 +118,7 @@ impl GeminiExporter {
             .map_err(|e| format!("读取 batchexecute 响应失败: {}", e))?;
 
         if !status.is_success() {
-            self.mark_request_failure().await;
+            self.mark_request_failure();
             let preview: String = resp_text.chars().take(500).collect();
             eprintln!("  [debug] HTTP {} 响应内容: {}", status.as_u16(), preview);
             return Err(format!("batchexecute 失败: HTTP {}", status.as_u16()));
@@ -127,13 +127,13 @@ impl GeminiExporter {
         let results = parse_batchexecute_response(&resp_text);
         for (rid, data) in &results {
             if rid == rpcid {
-                self.mark_request_success().await;
+                self.mark_request_success();
                 return Ok(data.clone());
             }
         }
 
         // 未找到目标 rpcid
-        self.mark_request_failure().await;
+        self.mark_request_failure();
         if has_batchexecute_session_error(&resp_text, rpcid) {
             return Err(format!(
                 "{}: rpcid={}",

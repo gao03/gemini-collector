@@ -124,7 +124,7 @@ impl GeminiExporter {
             let resp = match resp {
                 Ok(r) => r,
                 Err(e) => {
-                    self.mark_request_failure().await;
+                    self.mark_request_failure();
                     let fields = media_log_fields(
                         Some(&current_url),
                         media_type,
@@ -148,7 +148,7 @@ impl GeminiExporter {
                     .and_then(|v| v.to_str().ok());
                 match location {
                     Some(loc) => {
-                        self.mark_request_success().await;
+                        self.mark_request_success();
                         // 相对 URL 拼接
                         current_url = match Url::parse(&current_url) {
                             Ok(base) => base.join(loc).map(|u| u.to_string()).unwrap_or_else(|_| loc.to_string()),
@@ -157,7 +157,7 @@ impl GeminiExporter {
                         continue;
                     }
                     None => {
-                        self.mark_request_failure().await;
+                        self.mark_request_failure();
                         eprintln!(
                             "  [media-fail] 重定向缺少 location | media={} domain={}",
                             fields.media, fields.domain
@@ -168,12 +168,12 @@ impl GeminiExporter {
             }
 
             if status.is_success() {
-                self.mark_request_success().await;
+                self.mark_request_success();
                 let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
                 return Ok(Some(bytes.to_vec()));
             }
 
-            self.mark_request_failure().await;
+            self.mark_request_failure();
             eprintln!(
                 "  [media-fail] 非200状态码={} | media={} domain={}",
                 status.as_u16(),
@@ -183,7 +183,7 @@ impl GeminiExporter {
             return Ok(None);
         }
 
-        self.mark_request_failure().await;
+        self.mark_request_failure();
         let fields = media_log_fields(Some(url), media_type, media_hint);
         eprintln!(
             "  [media-fail] 重定向次数超限 | media={} domain={}",
@@ -262,14 +262,15 @@ impl GeminiExporter {
                         error: format!("write_failed: {}", e),
                     });
                 } else {
+                    let size_mb = bytes.len() as f64 / (1024.0 * 1024.0);
                     let fields = media_log_fields(Some(&item.url), item.media_type.as_deref(), Some(item.media_id.as_str()));
                     eprintln!(
-                        "  [media] ok: {} {}B media={} domain={} {:.1}s",
+                        "  [media] ok: {} {:.2}MB media={} domain={} {}ms",
                         item.media_id,
-                        bytes.len(),
+                        size_mb,
                         fields.media,
                         fields.domain,
-                        t_media.elapsed().as_secs_f64()
+                        t_media.elapsed().as_millis()
                     );
                     stats.media_downloaded += 1;
                 }

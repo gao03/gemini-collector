@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use rand::distr::{Distribution, Uniform};
 use serde_json::json;
@@ -92,16 +93,8 @@ impl GeminiExporter {
     }
 
     /// 将请求状态写入 sync_state.json
-    pub async fn sync_request_state_file(&self) {
-        let account_dir = self.request_state_account_dir.lock().await;
-        let account_dir = match account_dir.as_ref() {
-            Some(dir) => dir.clone(),
-            None => return,
-        };
-        drop(account_dir); // release lock early
-
-        let dir = self.request_state_account_dir.lock().await;
-        let dir = match dir.as_ref() {
+    pub fn sync_request_state_file(&self) {
+        let dir = match self.request_state_account_dir.load().as_ref() {
             Some(d) => d.clone(),
             None => return,
         };
@@ -126,7 +119,7 @@ impl GeminiExporter {
     }
 
     /// 设置请求状态作用域，从 sync_state 恢复失败计数
-    pub async fn set_request_state_scope(&self, account_dir: PathBuf) {
+    pub fn set_request_state_scope(&self, account_dir: PathBuf) {
         self.request_started.store(false, Ordering::Relaxed);
 
         let state = storage::load_sync_state(&account_dir);
@@ -141,7 +134,7 @@ impl GeminiExporter {
                         (count as u32).min(REQUEST_BACKOFF_LIMIT_FAILURES),
                         Ordering::Relaxed,
                     );
-                    *self.request_state_account_dir.lock().await = Some(account_dir);
+                    self.request_state_account_dir.store(Arc::new(Some(account_dir)));
                     return;
                 }
             }
@@ -159,7 +152,7 @@ impl GeminiExporter {
             }
         }
 
-        *self.request_state_account_dir.lock().await = Some(account_dir);
+        self.request_state_account_dir.store(Arc::new(Some(account_dir)));
     }
 
     /// 请求前等待：延迟 + 退避 + 退避上限探测。
@@ -185,7 +178,7 @@ impl GeminiExporter {
                     failures, label
                 );
             } else {
-                self.sync_request_state_file().await;
+                self.sync_request_state_file();
                 return Err(ProtocolError::RequestBackoffLimitReached);
             }
         }
@@ -198,13 +191,13 @@ impl GeminiExporter {
                 crate::protocol::REQUEST_JITTER_MODE,
             );
             let delay_sec = REQUEST_DELAY + jitter;
-            *self.last_delay_sec.lock().await = delay_sec;
+            self.last_delay_sec.store(delay_sec.to_bits(), Ordering::Relaxed);
             tokio::time::sleep(std::time::Duration::from_secs_f64(delay_sec)).await;
         }
 
         // 退避等待
         if backoff_sec > 0.0 && backoff_sec < REQUEST_BACKOFF_MAX_SECONDS {
-            self.sync_request_state_file().await;
+            self.sync_request_state_file();
             eprintln!(
                 "  [backoff] 连续失败退避等待: failures={}, wait={:.2}s, op={}",
                 failures, backoff_sec, label
@@ -217,23 +210,23 @@ impl GeminiExporter {
     }
 
     /// 标记请求成功，重置失败计数
-    pub async fn mark_request_success(&self) {
+    pub fn mark_request_success(&self) {
         if self.request_consecutive_failures.load(Ordering::Relaxed) == 0 {
             return;
         }
         self.request_consecutive_failures.store(0, Ordering::Relaxed);
         self.limit_probe_consumed.store(false, Ordering::Relaxed);
-        self.sync_request_state_file().await;
+        self.sync_request_state_file();
     }
 
     /// 标记请求失败，递增失败计数
-    pub async fn mark_request_failure(&self) {
+    pub fn mark_request_failure(&self) {
         let current = self.request_consecutive_failures.load(Ordering::Relaxed);
         self.request_consecutive_failures.store(
             (current + 1).min(REQUEST_BACKOFF_LIMIT_FAILURES),
             Ordering::Relaxed,
         );
-        self.sync_request_state_file().await;
+        self.sync_request_state_file();
     }
 
     /// GET 请求 + 自动重试（最多 attempts 次）。
@@ -261,13 +254,13 @@ impl GeminiExporter {
             match req.send().await {
                 Ok(resp) => {
                     if count_as_business_request {
-                        self.mark_request_success().await;
+                        self.mark_request_success();
                     }
                     return Ok(resp);
                 }
                 Err(e) => {
                     if count_as_business_request {
-                        self.mark_request_failure().await;
+                        self.mark_request_failure();
                     }
                     last_err = e.to_string();
                 }
