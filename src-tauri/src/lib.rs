@@ -1,5 +1,6 @@
 pub mod cookies;
 mod export;
+mod sync;
 pub mod gemini_api;
 mod import;
 pub mod media;
@@ -9,68 +10,11 @@ pub mod storage;
 pub mod turn_parser;
 mod worker_host;
 
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::path::Path;
 use tauri::Manager;
 use worker_host::EnqueueJobRequest;
 
 use export::{resolve_account_id_arg, value_to_non_empty_string};
-
-const PYTHON3_CANDIDATES: [&str; 3] = [
-    "/usr/local/bin/python3",    // Intel Homebrew
-    "/opt/homebrew/bin/python3", // Apple Silicon Homebrew
-    "/usr/bin/python3",          // macOS system python3
-];
-// Dev-time script path derived from Cargo.toml location at compile time
-const SCRIPT_PATH_DEV: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/gemini_export.py");
-const WORKER_SCRIPT_PATH_DEV: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/gemini_worker.py");
-
-fn find_script(app: &tauri::AppHandle) -> PathBuf {
-    let dev = PathBuf::from(SCRIPT_PATH_DEV);
-    if dev.exists() {
-        return dev;
-    }
-    // Production: bundled as resource
-    app.path()
-        .resource_dir()
-        .unwrap_or_default()
-        .join("gemini_export.py")
-}
-
-fn find_worker_script(app: &tauri::AppHandle) -> PathBuf {
-    let dev = PathBuf::from(WORKER_SCRIPT_PATH_DEV);
-    if dev.exists() {
-        return dev;
-    }
-    app.path()
-        .resource_dir()
-        .unwrap_or_default()
-        .join("gemini_worker.py")
-}
-
-
-static PYTHON_BIN: OnceLock<String> = OnceLock::new();
-
-fn init_python_bin() {
-    PYTHON_BIN.get_or_init(|| {
-        if let Ok(custom) = std::env::var("GEMINI_COLLECTOR_PYTHON") {
-            let trimmed = custom.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-        for candidate in PYTHON3_CANDIDATES {
-            if Path::new(candidate).exists() {
-                return candidate.to_string();
-            }
-        }
-        "python3".to_string()
-    });
-}
-
-fn python_bin() -> &'static str {
-    PYTHON_BIN.get().expect("init_python_bin not called")
-}
 
 fn read_account_registry_entry(data_dir: &Path, account_id: &str) -> Result<serde_json::Value, String> {
     let accounts_file = data_dir.join("accounts.json");
@@ -418,86 +362,90 @@ fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 // ============================================================================
-// Tauri 命令：Python 脚本 / Worker
+// Tauri 命令：Worker
 // ============================================================================
 
-/// Run `python3 gemini_export.py --accounts-only --output <appDataDir>`.
-/// Returns stdout on success, or an error string.
+/// 从本机浏览器读取 cookies，发现所有 Gemini 账号并写入 accounts.json。
 #[tauri::command]
 async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let script = find_script(&app);
 
-    if !script.exists() {
-        return Err(format!("脚本未找到: {}", script.display()));
-    }
-
-    let python = python_bin().to_string();
-    let data_dir_str = data_dir.to_str().unwrap_or("").to_string();
-    let script_str = script.to_str().unwrap_or("").to_string();
-    let script_dir = script
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .to_path_buf();
-
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new(&python)
-            .current_dir(&script_dir)  // ensure cdp_mode.py is resolvable
-            .arg(&script_str)
-            .arg("--accounts-only")
-            .arg("--output")
-            .arg(&data_dir_str)
-            .output()
+    // 读取浏览器 cookies
+    let all_cookies = tokio::task::spawn_blocking(|| {
+        cookies::get_cookies_from_local_browser()
     })
     .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("cookies 读取任务失败: {}", e))?
+    .map_err(|e| format!("cookies 读取失败: {}", e))?;
 
-    if result.status.success() {
-        Ok(String::from_utf8_lossy(&result.stdout).to_string())
-    } else {
-        let stdout = String::from_utf8_lossy(&result.stdout);
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        let mut msg = String::new();
-        let stdout_trimmed = stdout.trim();
-        let stderr_trimmed = stderr.trim();
-        if !stdout_trimmed.is_empty() {
-            msg.push_str(stdout_trimmed);
-        }
-        if !stderr_trimmed.is_empty() {
-            if !msg.is_empty() {
-                msg.push('\n');
-            }
-            msg.push_str(stderr_trimmed);
-        }
-        if msg.is_empty() {
-            msg.push_str(&format!("进程退出码: {}", result.status));
-        }
-        Err(msg)
+    if all_cookies.is_empty() {
+        return Err("未能从浏览器读取到 cookies，请确保 Chrome 已登录 Gemini".to_string());
     }
+
+    // 发现 email ↔ authuser 映射
+    let mappings =
+        cookies::list_accounts::discover_email_authuser_mapping(&all_cookies)
+            .await
+            .map_err(|e| format!("账号发现失败: {}", e))?;
+
+    if mappings.is_empty() {
+        return Err("未发现已登录的 Gemini 账号".to_string());
+    }
+
+    // 逐个写入 accounts.json + meta.json
+    let mut imported_ids: Vec<String> = Vec::new();
+    for m in &mappings {
+        let account_id = protocol::email_to_account_id(&m.email);
+        let account_dir = data_dir.join("accounts").join(&account_id);
+        std::fs::create_dir_all(account_dir.join("conversations")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(account_dir.join("media")).map_err(|e| e.to_string())?;
+
+        let name = m.email.split('@').next().unwrap_or(&account_id).to_string();
+        let avatar_text = name
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string());
+
+        let info = serde_json::json!({
+            "version": 1,
+            "id": account_id,
+            "email": m.email,
+            "name": name,
+            "avatarText": avatar_text,
+            "avatarColor": "#667eea",
+            "conversationCount": 0,
+            "remoteConversationCount": serde_json::Value::Null,
+            "lastSyncAt": serde_json::Value::Null,
+            "lastSyncResult": serde_json::Value::Null,
+            "authuser": m.authuser,
+        });
+
+        storage::write_accounts_json(&data_dir, &info).map_err(|e| e.to_string())?;
+        storage::write_account_meta(&account_dir, &info).map_err(|e| e.to_string())?;
+        imported_ids.push(account_id);
+    }
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "imported": imported_ids.len(),
+        "accounts": imported_ids,
+    })
+    .to_string())
 }
 
 #[tauri::command]
-fn enqueue_job(req: EnqueueJobRequest) -> Result<String, String> {
-    worker_host::enqueue_job(req)
+async fn enqueue_job(req: EnqueueJobRequest) -> Result<String, String> {
+    worker_host::enqueue_job_async(req).await
 }
 
 #[tauri::command]
-fn cancel_job(
-    app: tauri::AppHandle,
+async fn cancel_job(
     account_id: Option<String>,
     #[allow(non_snake_case)] accountId: Option<String>,
 ) -> Result<(), String> {
     let account_id = resolve_account_id_arg(account_id, accountId)?;
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let flag_path = data_dir
-        .join("accounts")
-        .join(&account_id)
-        .join(".cancel_requested");
-    if !flag_path.parent().map(|p| p.exists()).unwrap_or(false) {
-        return Err(format!("账号目录不存在: {}", account_id));
-    }
-    std::fs::write(&flag_path, b"").map_err(|e| format!("写入取消标志失败: {}", e))
+    worker_host::cancel_job_async(&account_id).await
 }
 
 // ============================================================================
@@ -787,29 +735,15 @@ fn load_conversation_detail(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_python_bin();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
             let app_handle = app.handle().clone();
             let output_dir = app_handle.path().app_data_dir()?;
-            let worker_script = find_worker_script(&app_handle);
-            if !worker_script.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("worker 脚本未找到: {}", worker_script.display()),
-                )
-                .into());
-            }
 
-            worker_host::init_worker_host(
-                app_handle,
-                python_bin().to_string(),
-                worker_script,
-                output_dir,
-            )
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            worker_host::init_worker_host(app_handle, output_dir)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

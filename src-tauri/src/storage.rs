@@ -711,14 +711,15 @@ pub fn write_accounts_json(base_dir: &Path, account_info: &Value) -> Result<()> 
     let info = account_info.as_object().unwrap();
     let account_id = info["id"].as_str().unwrap();
 
-    let mut existing: HashMap<String, Value> = HashMap::new();
+    // 读取现有账号列表，保留原始顺序
+    let mut existing_ordered: Vec<Value> = Vec::new();
     if accounts_file.exists() {
         if let Ok(content) = std::fs::read_to_string(&accounts_file) {
             if let Ok(data) = serde_json::from_str::<Value>(&content) {
                 if let Some(accounts) = data.get("accounts").and_then(|v| v.as_array()) {
                     for a in accounts {
-                        if let Some(id) = a.get("id").and_then(|v| v.as_str()) {
-                            existing.insert(id.to_string(), a.clone());
+                        if a.get("id").and_then(|v| v.as_str()).is_some() {
+                            existing_ordered.push(a.clone());
                         }
                     }
                 }
@@ -726,25 +727,41 @@ pub fn write_accounts_json(base_dir: &Path, account_info: &Value) -> Result<()> 
         }
     }
 
-    let existing_account = existing.get(account_id).cloned().unwrap_or(json!({}));
+    let existing_account = existing_ordered
+        .iter()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(account_id))
+        .cloned()
+        .unwrap_or(json!({}));
     let authuser = info
         .get("authuser")
         .filter(|v| !v.is_null())
         .or_else(|| existing_account.get("authuser"));
 
-    let entry = json!({
+    let new_entry = json!({
         "id": account_id,
         "email": info.get("email").and_then(|v| v.as_str()).unwrap_or(""),
         "addedAt": existing_account.get("addedAt").and_then(|v| v.as_str()).unwrap_or(&now_iso),
         "dataDir": format!("accounts/{}", account_id),
         "authuser": authuser,
     });
-    existing.insert(account_id.to_string(), entry);
+
+    // 原地更新或追加，保持原始顺序
+    let mut found = false;
+    for entry in &mut existing_ordered {
+        if entry.get("id").and_then(|v| v.as_str()) == Some(account_id) {
+            *entry = new_entry.clone();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        existing_ordered.push(new_entry);
+    }
 
     let data = json!({
         "version": 1,
         "updatedAt": now_iso,
-        "accounts": existing.values().collect::<Vec<_>>(),
+        "accounts": existing_ordered,
     });
     std::fs::write(&accounts_file, serde_json::to_string_pretty(&data)?)?;
     Ok(())
