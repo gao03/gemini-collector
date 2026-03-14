@@ -13,7 +13,7 @@ use reqwest::header;
 use url::Url;
 
 use crate::media::{
-    append_authuser, is_protected_media_url, media_log_fields, video_preview_name, infer_media_type,
+    append_authuser, is_protected_media_url, media_log_fields, infer_media_type,
 };
 use crate::protocol::{BROWSER_ACCEPT_LANGUAGE, BROWSER_USER_AGENT, GEMINI_BASE};
 use crate::storage;
@@ -367,17 +367,6 @@ impl GeminiExporter {
                         "media_id".to_string(),
                         serde_json::Value::String(media_id.clone()),
                     );
-
-                    let is_video = f_obj
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        == Some("video");
-                    if is_video {
-                        f_obj.insert(
-                            "preview_media_id".to_string(),
-                            serde_json::Value::String(video_preview_name(&media_id)),
-                        );
-                    }
 
                     let target = media_dir.join(&media_id);
                     if !target.exists()
