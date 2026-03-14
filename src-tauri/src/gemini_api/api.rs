@@ -86,7 +86,7 @@ fn title_re() -> &'static Regex {
 impl GeminiExporter {
     /// 从 Gemini 页面提取认证参数 (at, bl, f.sid)。
     pub async fn init_auth(&mut self) -> Result<(), String> {
-        eprintln!("[*] 获取认证参数...");
+        eprintln!("获取认证参数...");
         self.ensure_authuser().await?; // 对应 Python _authuser_params() 的懒解析
         let params = self.authuser_params();
         if let Some(ref au) = self.authuser {
@@ -283,7 +283,7 @@ impl GeminiExporter {
 
     /// 获取所有聊天列表（含分页）。
     pub async fn get_all_chats(&self) -> Result<Vec<ChatListItem>, String> {
-        eprintln!("[*] 获取聊天列表...");
+        eprintln!("获取聊天列表...");
         let mut all_chats = Vec::new();
         let mut page = 0u32;
         let mut cursor: Option<String> = None;

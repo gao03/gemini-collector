@@ -823,6 +823,33 @@ pub fn normalize_turn_media_first_seen(parsed_turns: &mut [ParsedTurn]) {
 }
 
 // ============================================================================
+// Value 转换辅助（供 export_cli 使用）
+// ============================================================================
+
+/// 解析 raw turn 并返回 serde_json::Value（用于与 storage 层对接）
+pub fn parse_turn_to_value(raw_turn: &Value) -> Value {
+    let parsed = parse_turn(raw_turn);
+    serde_json::to_value(&parsed).unwrap_or(Value::Null)
+}
+
+/// 对 Value 形式的 parsed_turns 做 normalize_turn_media_first_seen
+pub fn normalize_turn_media_first_seen_values(parsed_turns: &mut [Value]) {
+    // 反序列化为 ParsedTurn，处理后再写回
+    let mut turns: Vec<ParsedTurn> = parsed_turns
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect();
+    normalize_turn_media_first_seen(&mut turns);
+    for (i, turn) in turns.into_iter().enumerate() {
+        if i < parsed_turns.len() {
+            if let Ok(v) = serde_json::to_value(&turn) {
+                parsed_turns[i] = v;
+            }
+        }
+    }
+}
+
+// ============================================================================
 // 测试
 // ============================================================================
 

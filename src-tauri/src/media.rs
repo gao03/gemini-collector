@@ -146,6 +146,76 @@ pub fn ensure_video_previews_from_turns(
     (generated, failed)
 }
 
+/// Value 版本：遍历 Value 形式的 parsed_turns，生成视频预览。
+pub struct PreviewStats {
+    pub preview_generated: usize,
+    pub preview_failed: usize,
+}
+
+pub fn ensure_video_previews_from_turns_values(
+    parsed_turns: &[serde_json::Value],
+    media_dir: &Path,
+) -> PreviewStats {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut generated = 0usize;
+    let mut failed = 0usize;
+
+    for turn in parsed_turns {
+        for role_key in &["user", "assistant"] {
+            let files = match turn.get(role_key).and_then(|v| v.get("files")).and_then(|v| v.as_array()) {
+                Some(f) => f,
+                None => continue,
+            };
+            for f in files {
+                let media_type = f.get("media_type").or_else(|| f.get("type")).and_then(|v| v.as_str()).unwrap_or("");
+                if media_type != "video" {
+                    continue;
+                }
+                let media_id = match f.get("media_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    Some(id) => id.to_string(),
+                    None => continue,
+                };
+                let preview_id = f
+                    .get("preview_media_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| video_preview_name(&media_id));
+
+                let key = (media_id.clone(), preview_id.clone());
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key);
+
+                let video_path = media_dir.join(&media_id);
+                let preview_path = media_dir.join(&preview_id);
+
+                if preview_path.exists()
+                    && preview_path.metadata().map(|m| m.len() > 0).unwrap_or(false)
+                {
+                    continue;
+                }
+                if !video_path.exists() {
+                    failed += 1;
+                    continue;
+                }
+
+                if generate_video_preview(&video_path, &preview_path) {
+                    generated += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    PreviewStats {
+        preview_generated: generated,
+        preview_failed: failed,
+    }
+}
+
 // ============================================================================
 // 媒体类型推断
 // ============================================================================

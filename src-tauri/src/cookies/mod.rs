@@ -148,7 +148,7 @@ fn tempfile_copy(src: &Path) -> Result<std::path::PathBuf> {
 /// High-level: discover browsers, read & decrypt, select preferred Google cookies.
 /// On failure, performs Keychain diagnostics (macOS) and outputs actionable hints.
 pub fn get_cookies_from_local_browser() -> Result<HashMap<String, String>> {
-    eprintln!("[*] 尝试从本机浏览器读取 cookies...");
+    eprintln!("尝试从本机浏览器读取 cookies...");
 
     let (entries, permission_issues) = discover::discover_chrome_cookie_files();
 

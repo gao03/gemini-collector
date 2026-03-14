@@ -1450,6 +1450,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
+ "arc-swap",
  "cbc",
  "chrono",
  "dirs 5.0.1",

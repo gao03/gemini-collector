@@ -1,17 +1,33 @@
+//! In-process worker：直接在 Tauri 主进程内调度任务，不再依赖 Python 子进程。
+//!
+//! Phase 5 架构：
+//! - 每个账号一个 `ArcSwap<GeminiExporter>`，无锁读取，session 过期时原子替换
+//! - 任务通过 `tokio::spawn` 调度，进度事件直接 `AppHandle::emit()`
+//! - 取消机制使用 `CancellationToken`（AtomicBool，替代 `.cancel_requested` 文件 flag）
+//! - 每个账号同一时刻只有一个任务，无并发竞态
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+
+use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::PathBuf;
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
-use std::thread;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
 
-const WORKER_EVENT_PREFIX: &str = "worker://";
+use crate::cookies;
+use crate::sync::CancellationToken;
+use crate::gemini_api::GeminiExporter;
+
 const WORKER_EVENT_JOB_STATE: &str = "worker://job_state";
+
+const MAX_SESSION_RETRIES: u32 = 3;
+
+// ============================================================================
+// 公开类型
+// ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,525 +62,664 @@ impl EnqueueJobRequest {
     }
 }
 
-#[derive(Clone)]
-struct WorkerProcess {
-    generation: u64,
-    child: Arc<Mutex<Child>>,
-    stdin: Arc<Mutex<BufWriter<ChildStdin>>>,
-    pending: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>,
+// ============================================================================
+// 内部类型
+// ============================================================================
+
+struct AccountSession {
+    exporter: ArcSwap<GeminiExporter>,
 }
 
-impl WorkerProcess {
-    fn is_alive(&self) -> bool {
-        let mut child_guard = match self.child.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        match child_guard.try_wait() {
-            Ok(Some(_)) => false,
-            Ok(None) => true,
-            Err(_) => false,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct JobTracking {
+struct JobContext {
+    job_id: String,
     job_type: String,
     account_id: String,
     conversation_id: Option<String>,
 }
 
-struct HostInner {
-    process: Option<WorkerProcess>,
-    tracked_jobs: HashMap<String, JobTracking>,
-    restart_attempt: u32,
-}
+// ============================================================================
+// WorkerHost
+// ============================================================================
 
 pub struct WorkerHost {
     app: AppHandle,
-    python_bin: String,
-    worker_script: PathBuf,
     output_dir: PathBuf,
-    inner: Mutex<HostInner>,
-    next_request_id: AtomicU64,
-    next_generation: AtomicU64,
+    /// 按账号缓存的 exporter session
+    sessions: Mutex<HashMap<String, Arc<AccountSession>>>,
+    /// 按账号追踪活跃任务的取消令牌
+    active_cancels: Mutex<HashMap<String, CancellationToken>>,
+    /// Cookie 缓存（多账号共享同一组浏览器 cookies）
+    cookies_cache: Mutex<Option<HashMap<String, String>>>,
+    /// 递增 job ID
+    next_job_id: AtomicU64,
+    /// 是否正在关闭
     shutting_down: AtomicBool,
 }
 
 impl WorkerHost {
-    fn new(app: AppHandle, python_bin: String, worker_script: PathBuf, output_dir: PathBuf) -> Self {
+    fn new(app: AppHandle, output_dir: PathBuf) -> Self {
         Self {
             app,
-            python_bin,
-            worker_script,
             output_dir,
-            inner: Mutex::new(HostInner {
-                process: None,
-                tracked_jobs: HashMap::new(),
-                restart_attempt: 0,
-            }),
-            next_request_id: AtomicU64::new(1),
-            next_generation: AtomicU64::new(1),
+            sessions: Mutex::new(HashMap::new()),
+            active_cancels: Mutex::new(HashMap::new()),
+            cookies_cache: Mutex::new(None),
+            next_job_id: AtomicU64::new(1),
             shutting_down: AtomicBool::new(false),
         }
     }
 
-    fn spawn_worker(self: &Arc<Self>) -> Result<WorkerProcess, String> {
-        let script_dir = self
-            .worker_script
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let script_str = self.worker_script.to_string_lossy().to_string();
-        let output_dir_str = self.output_dir.to_string_lossy().to_string();
+    /// 读取本机浏览器 cookies（带缓存）
+    async fn get_cookies(&self) -> Result<HashMap<String, String>, String> {
+        let mut cache = self.cookies_cache.lock().await;
+        if let Some(ref c) = *cache {
+            return Ok(c.clone());
+        }
+        let cookies = tokio::task::spawn_blocking(|| {
+            cookies::get_cookies_from_local_browser()
+        })
+        .await
+        .map_err(|e| format!("cookies 读取任务失败: {}", e))?
+        .map_err(|e| format!("cookies 读取失败: {}", e))?;
 
-        let mut cmd = Command::new(&self.python_bin);
-        cmd.current_dir(&script_dir)
-            .arg(&script_str)
-            .arg("--output-dir")
-            .arg(&output_dir_str)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd.spawn().map_err(|e| {
-            format!(
-                "启动 worker 失败: {} (python={}, script={})",
-                e, self.python_bin, script_str
-            )
-        })?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "worker stdin 不可用".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "worker stdout 不可用".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "worker stderr 不可用".to_string())?;
-
-        let generation = self.next_generation.fetch_add(1, Ordering::SeqCst);
-        let process = WorkerProcess {
-            generation,
-            child: Arc::new(Mutex::new(child)),
-            stdin: Arc::new(Mutex::new(BufWriter::new(stdin))),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        self.spawn_stdout_reader(generation, process.pending.clone(), stdout);
-        self.spawn_stderr_reader(generation, stderr);
-        self.spawn_monitor(generation, process.child.clone());
-        Ok(process)
+        if cookies.is_empty() {
+            return Err("本机浏览器 cookies 读取结果为空".to_string());
+        }
+        *cache = Some(cookies.clone());
+        Ok(cookies)
     }
 
-    fn spawn_stdout_reader(
+    /// 从 accounts.json 读取指定账号的 authuser 和 email
+    fn read_account_mapping(&self, account_id: &str) -> Result<(Option<String>, Option<String>), String> {
+        let accounts_file = self.output_dir.join("accounts.json");
+        if !accounts_file.exists() {
+            return Err("accounts.json 不存在，请先导入账号".to_string());
+        }
+        let content = std::fs::read_to_string(&accounts_file).map_err(|e| e.to_string())?;
+        let data: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        let rows = data
+            .get("accounts")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "accounts.json 格式错误".to_string())?;
+
+        for item in rows {
+            if item.get("id").and_then(|v| v.as_str()) == Some(account_id) {
+                let authuser = item
+                    .get("authuser")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                let email = item
+                    .get("email")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_lowercase());
+                return Ok((authuser, email));
+            }
+        }
+        Err(format!("未找到账号映射: {}", account_id))
+    }
+
+    /// 获取或创建某个账号的 exporter
+    async fn get_exporter(self: &Arc<Self>, account_id: &str) -> Result<Arc<GeminiExporter>, String> {
+        {
+            let sessions = self.sessions.lock().await;
+            if let Some(session) = sessions.get(account_id) {
+                return Ok(session.exporter.load_full());
+            }
+        }
+
+        let exporter = self.create_exporter(account_id).await?;
+        let arc_exporter = Arc::new(exporter);
+        let session = Arc::new(AccountSession {
+            exporter: ArcSwap::new(arc_exporter.clone()),
+        });
+
+        self.sessions
+            .lock()
+            .await
+            .insert(account_id.to_string(), session);
+
+        Ok(arc_exporter)
+    }
+
+    /// 创建新的 exporter 实例（含 init_auth）
+    async fn create_exporter(&self, account_id: &str) -> Result<GeminiExporter, String> {
+        let cookies = self.get_cookies().await?;
+        let (authuser, email) = self.read_account_mapping(account_id)?;
+
+        let mut exporter = GeminiExporter::new(
+            cookies,
+            authuser,
+            Some(account_id.to_string()),
+            email,
+        );
+        exporter.init_auth().await?;
+        Ok(exporter)
+    }
+
+    /// 刷新某个账号的 exporter session（重新读取 cookies）
+    async fn refresh_session(self: &Arc<Self>, account_id: &str) -> Result<Arc<GeminiExporter>, String> {
+        eprintln!("session 过期，重建 exporter (account={})", account_id);
+
+        // 清空 cookie 缓存
+        *self.cookies_cache.lock().await = None;
+
+        let exporter = self.create_exporter(account_id).await?;
+        let key_fields: Vec<&str> = ["__Secure-1PSID", "__Secure-1PSIDTS"]
+            .iter()
+            .filter(|k| exporter.cookies.contains_key(**k))
+            .copied()
+            .collect();
+        eprintln!(
+            "已从 Chrome 读取到 {} 个 cookies，关键字段: {:?}",
+            exporter.cookies.len(),
+            key_fields
+        );
+        let arc_exporter = Arc::new(exporter);
+
+        let sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get(account_id) {
+            session.exporter.store(arc_exporter.clone());
+        }
+
+        eprintln!("重建成功 ✓");
+        Ok(arc_exporter)
+    }
+
+    /// 执行函数，遇到 SessionExpired 时刷新 session 重试
+    async fn run_with_session_retry<F, Fut, T>(
         self: &Arc<Self>,
-        generation: u64,
-        pending: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>,
-        stdout: ChildStdout,
+        account_id: &str,
+        mut make_fut: F,
+    ) -> Result<T, String>
+    where
+        F: FnMut(Arc<GeminiExporter>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, String>>,
+    {
+        let mut exporter = self.get_exporter(account_id).await?;
+
+        for attempt in 0..=MAX_SESSION_RETRIES {
+            match make_fut(exporter.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    if is_session_expired_error(&e) && attempt < MAX_SESSION_RETRIES {
+                        eprintln!(
+                            "第 {} 次 session 过期，正在重建: {}",
+                            attempt + 1,
+                            e
+                        );
+                        exporter = self.refresh_session(account_id).await?;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    // ========================================================================
+    // 事件发送
+    // ========================================================================
+
+    fn emit_job_state(
+        &self,
+        ctx: &JobContext,
+        state: &str,
+        phase: Option<&str>,
+        progress: Option<Value>,
+        error: Option<Value>,
     ) {
-        let weak = Arc::downgrade(self);
-        thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                let line_text = match line {
-                    Ok(s) => s,
-                    Err(err) => {
-                        eprintln!("[worker_host] stdout read error: {}", err);
-                        break;
-                    }
-                };
-                if line_text.trim().is_empty() {
-                    continue;
-                }
-
-                let parsed: Value = match serde_json::from_str(&line_text) {
-                    Ok(v) => v,
-                    Err(err) => {
-                        eprintln!("[worker_host] stdout json parse error: {}", err);
-                        eprintln!("[worker_host] line: {}", line_text);
-                        continue;
-                    }
-                };
-
-                if let Some(req_id) = parsed.get("id").and_then(|v| v.as_str()) {
-                    let tx_opt = {
-                        let mut guard = match pending.lock() {
-                            Ok(g) => g,
-                            Err(_) => continue,
-                        };
-                        guard.remove(req_id)
-                    };
-                    if let Some(tx) = tx_opt {
-                        let ok = parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if ok {
-                            let _ = tx.send(Ok(parsed.get("result").cloned().unwrap_or(Value::Null)));
-                        } else {
-                            let msg = parsed
-                                .get("error")
-                                .and_then(|e| e.get("message"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("worker 返回错误")
-                                .to_string();
-                            let _ = tx.send(Err(msg));
-                        }
-                    }
-                    continue;
-                }
-
-                if let Some(event_name) = parsed.get("event").and_then(|v| v.as_str()) {
-                    let payload = parsed.get("payload").cloned().unwrap_or(Value::Null);
-                    if let Some(host) = weak.upgrade() {
-                        host.on_worker_event(event_name, payload);
-                    }
-                }
-            }
-
-            if let Some(host) = weak.upgrade() {
-                host.mark_worker_dead(generation, "stdout closed", true);
-            }
+        let mut payload = json!({
+            "jobId": ctx.job_id,
+            "state": state,
+            "type": ctx.job_type,
+            "accountId": ctx.account_id,
         });
+        if let Some(cid) = &ctx.conversation_id {
+            payload["conversationId"] = json!(cid);
+        }
+        if let Some(p) = phase {
+            payload["phase"] = json!(p);
+        }
+        if let Some(prog) = progress {
+            payload["progress"] = prog;
+        }
+        if let Some(err) = error {
+            payload["error"] = err;
+        }
+        let _ = self.app.emit(WORKER_EVENT_JOB_STATE, payload);
     }
 
-    fn spawn_stderr_reader(self: &Arc<Self>, generation: u64, stderr: ChildStderr) {
-        thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                match line {
-                    Ok(s) => {
-                        if !s.trim().is_empty() {
-                            eprintln!("[worker:{}] {}", generation, s);
-                        }
-                    }
-                    Err(err) => {
-                        eprintln!("[worker_host] stderr read error: {}", err);
-                        break;
-                    }
-                }
-            }
-        });
-    }
+    // ========================================================================
+    // 任务执行
+    // ========================================================================
 
-    fn spawn_monitor(self: &Arc<Self>, generation: u64, child: Arc<Mutex<Child>>) {
-        let weak: Weak<Self> = Arc::downgrade(self);
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_millis(500));
-            let status = {
-                let mut guard = match child.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
-                };
-                match guard.try_wait() {
-                    Ok(v) => v,
-                    Err(err) => {
-                        eprintln!("[worker_host] try_wait error: {}", err);
-                        None
-                    }
-                }
-            };
-
-            if let Some(exit_status) = status {
-                if let Some(host) = weak.upgrade() {
-                    let reason = format!("process exited: {}", exit_status);
-                    host.mark_worker_dead(generation, &reason, true);
-                }
-                return;
-            }
-
-            if weak.upgrade().is_none() {
-                return;
-            }
-        });
-    }
-
-    fn on_worker_event(&self, event_name: &str, payload: Value) {
-        if event_name == "job_state" {
-            self.update_tracked_jobs(&payload);
-        }
-        let full_event = format!("{}{}", WORKER_EVENT_PREFIX, event_name);
-        let _ = self.app.emit(&full_event, payload);
-    }
-
-    fn update_tracked_jobs(&self, payload: &Value) {
-        let job_id = payload
-            .get("jobId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let state = payload.get("state").and_then(|v| v.as_str());
-        let Some(job_id_value) = job_id else {
-            return;
-        };
-        let Some(state_value) = state else {
-            return;
-        };
-
-        let mut inner = match self.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-
-        match state_value {
-            "queued" | "running" => {
-                let job_type = payload
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let account_id = payload
-                    .get("accountId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let conversation_id = payload
-                    .get("conversationId")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                inner.tracked_jobs.insert(
-                    job_id_value,
-                    JobTracking {
-                        job_type,
-                        account_id,
-                        conversation_id,
-                    },
-                );
-            }
-            "done" | "failed" => {
-                inner.tracked_jobs.remove(&job_id_value);
-            }
-            _ => {}
-        }
-    }
-
-    fn ensure_process(self: &Arc<Self>) -> Result<WorkerProcess, String> {
-        {
-            let mut inner = self.inner.lock().map_err(|_| "worker 状态锁失败".to_string())?;
-            if let Some(proc_ref) = inner.process.clone() {
-                if proc_ref.is_alive() {
-                    return Ok(proc_ref);
-                }
-                inner.process = None;
-            }
-        }
-
-        let process = self.spawn_worker()?;
-        {
-            let mut inner = self.inner.lock().map_err(|_| "worker 状态锁失败".to_string())?;
-            inner.process = Some(process.clone());
-            inner.restart_attempt = 0;
-        }
-        Ok(process)
-    }
-
-    fn backoff_duration(attempt: u32) -> Duration {
-        match attempt {
-            0 => Duration::from_millis(500),
-            1 => Duration::from_secs(1),
-            _ => Duration::from_secs(2),
-        }
-    }
-
-    fn mark_worker_dead(self: &Arc<Self>, generation: u64, reason: &str, auto_restart: bool) {
-        let (proc_opt, tracked, delay) = {
-            let mut inner = match self.inner.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-
-            let Some(proc_ref) = inner.process.clone() else {
-                return;
-            };
-            if proc_ref.generation != generation {
-                return;
-            }
-
-            inner.process = None;
-            let jobs: Vec<(String, JobTracking)> = inner.tracked_jobs.drain().collect();
-
-            let backoff = if auto_restart {
-                let attempt = inner.restart_attempt;
-                inner.restart_attempt = inner.restart_attempt.saturating_add(1);
-                Some(Self::backoff_duration(attempt))
-            } else {
-                None
-            };
-
-            (Some(proc_ref), jobs, backoff)
-        };
-
-        if let Some(proc_ref) = proc_opt {
-            let mut drained = Vec::new();
-            if let Ok(mut pending_guard) = proc_ref.pending.lock() {
-                drained.extend(pending_guard.drain().map(|(_, tx)| tx));
-            }
-            for tx in drained {
-                let _ = tx.send(Err(format!("worker 不可用: {}", reason)));
-            }
-        }
-
-        for (job_id, job) in tracked {
-            let payload = json!({
-                "jobId": job_id,
-                "state": "failed",
-                "type": job.job_type,
-                "accountId": job.account_id,
-                "conversationId": job.conversation_id,
-                "error": {
-                    "code": "TASK_INTERRUPTED",
-                    "message": format!("Worker 中断: {}", reason),
-                    "retryable": true
-                }
-            });
-            let _ = self.app.emit(WORKER_EVENT_JOB_STATE, payload);
-        }
-
-        if auto_restart && !self.shutting_down.load(Ordering::SeqCst) {
-            if let Some(wait) = delay {
-                let weak = Arc::downgrade(self);
-                thread::spawn(move || {
-                    thread::sleep(wait);
-                    if let Some(host) = weak.upgrade() {
-                        if host.shutting_down.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        if let Err(err) = host.ensure_process() {
-                            eprintln!("[worker_host] restart failed: {}", err);
-                        }
-                    }
-                });
-            }
-        }
-    }
-
-    fn request(
+    async fn execute_sync_list(
         self: &Arc<Self>,
-        method: &str,
-        params: Value,
-        timeout: Duration,
+        ctx: &JobContext,
+        stop_on_unchanged: bool,
+        cancel: &CancellationToken,
     ) -> Result<Value, String> {
-        let mut attempts = 0;
-        loop {
-            attempts += 1;
-            let process = self.ensure_process()?;
-            let req_id = format!("req_{}", self.next_request_id.fetch_add(1, Ordering::SeqCst));
-            let payload = json!({
-                "id": req_id,
-                "method": method,
-                "params": params.clone(),
-            });
+        let output_dir = self.output_dir.clone();
+        let account_id = ctx.account_id.clone();
 
-            let (tx, rx) = mpsc::channel::<Result<Value, String>>();
-            {
-                let mut pending_guard = process
-                    .pending
-                    .lock()
-                    .map_err(|_| "worker pending 锁失败".to_string())?;
-                pending_guard.insert(req_id.clone(), tx);
+        self.run_with_session_retry(&account_id, |exporter| {
+            let output_dir = output_dir.clone();
+            let cancel = cancel.clone();
+            async move {
+                let result = exporter
+                    .export_list_only(&output_dir, stop_on_unchanged, &cancel)
+                    .await?;
+                Ok(json!({
+                    "total": result.remote_count,
+                    "updatedIds": result.updated_ids,
+                }))
             }
+        })
+        .await
+    }
 
-            let write_result = (|| -> Result<(), String> {
-                let mut stdin_guard = process
-                    .stdin
-                    .lock()
-                    .map_err(|_| "worker stdin 锁失败".to_string())?;
-                let text = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-                stdin_guard
-                    .write_all(text.as_bytes())
-                    .map_err(|e| e.to_string())?;
-                stdin_guard.write_all(b"\n").map_err(|e| e.to_string())?;
-                stdin_guard.flush().map_err(|e| e.to_string())
-            })();
+    async fn execute_sync_conversation(
+        self: &Arc<Self>,
+        ctx: &JobContext,
+        cancel: &CancellationToken,
+    ) -> Result<Value, String> {
+        let conversation_id = ctx
+            .conversation_id
+            .as_ref()
+            .ok_or_else(|| "sync_conversation 缺少 conversationId".to_string())?
+            .clone();
+        let output_dir = self.output_dir.clone();
+        let account_id = ctx.account_id.clone();
 
-            if let Err(err) = write_result {
-                if let Ok(mut pending_guard) = process.pending.lock() {
-                    pending_guard.remove(&req_id);
-                }
-                self.mark_worker_dead(
-                    process.generation,
-                    &format!("stdin write failed: {}", err),
-                    true,
-                );
-                if attempts < 2 {
-                    continue;
-                }
-                return Err(format!("worker 请求失败: {}", err));
+        self.run_with_session_retry(&account_id, |exporter| {
+            let output_dir = output_dir.clone();
+            let cancel = cancel.clone();
+            let cid = conversation_id.clone();
+            async move {
+                exporter
+                    .sync_single_conversation(&cid, &output_dir, &cancel)
+                    .await?;
+                Ok(json!({ "conversationId": cid }))
             }
+        })
+        .await
+    }
 
-            match rx.recv_timeout(timeout) {
-                Ok(result) => return result,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Ok(mut pending_guard) = process.pending.lock() {
-                        pending_guard.remove(&req_id);
+    async fn execute_sync_full(
+        self: &Arc<Self>,
+        ctx: &JobContext,
+        cancel: &CancellationToken,
+    ) -> Result<Value, String> {
+        let account_id = &ctx.account_id;
+        let mut success_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut failed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        eprintln!("[sync_full] 开始全量同步: account={}", account_id);
+
+        let items_before = load_conversation_items(&self.output_dir, account_id);
+        let before_set: std::collections::HashSet<String> =
+            load_conversation_ids(&items_before).into_iter().collect();
+
+        // 1) 失败重试
+        let retry_ids = collect_failed_conversation_ids(&self.output_dir, account_id, &items_before);
+        eprintln!("[retry_failed] 失败记录重试: {}", retry_ids.len());
+        let retry_result = self
+            .sync_conversation_batch(ctx, &retry_ids, "retry_failed", cancel)
+            .await?;
+        merge_batch_result(&retry_result, &mut success_ids, &mut failed_ids);
+
+        // 2) 空对话补齐
+        let empty_ids: Vec<String> = collect_empty_conversation_ids(&items_before)
+            .into_iter()
+            .filter(|id| !success_ids.contains(id))
+            .collect();
+        eprintln!("[sync_empty] 空会话补齐: {}", empty_ids.len());
+        let empty_result = self
+            .sync_conversation_batch(ctx, &empty_ids, "sync_empty", cancel)
+            .await?;
+        merge_batch_result(&empty_result, &mut success_ids, &mut failed_ids);
+
+        // 3) 拉最新列表
+        self.emit_job_state(ctx, "running", Some("refresh_list"), None, None);
+        eprintln!("[refresh_list] 拉取最新列表");
+        let list_result = self.execute_sync_list(ctx, true, cancel).await?;
+        let after_ids = load_conversation_ids(&load_conversation_items(
+            &self.output_dir,
+            account_id,
+        ));
+        let updated_ids_from_list: std::collections::HashSet<String> = list_result
+            .get("updatedIds")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let new_ids: Vec<String> = after_ids
+            .iter()
+            .filter(|id| !before_set.contains(*id) && !success_ids.contains(*id))
+            .cloned()
+            .collect();
+        eprintln!("[sync_new] 新增会话同步: {}", new_ids.len());
+        let new_result = self
+            .sync_conversation_batch(ctx, &new_ids, "sync_new", cancel)
+            .await?;
+        merge_batch_result(&new_result, &mut success_ids, &mut failed_ids);
+
+        // 4) 有更新的老会话
+        let remaining_old_ids: Vec<String> = after_ids
+            .iter()
+            .filter(|id| {
+                before_set.contains(*id)
+                    && !success_ids.contains(*id)
+                    && updated_ids_from_list.contains(*id)
+            })
+            .cloned()
+            .collect();
+        eprintln!(
+            "[sync_old] 剩余老会话检查更新: {}",
+            remaining_old_ids.len()
+        );
+        let old_result = self
+            .sync_conversation_batch(ctx, &remaining_old_ids, "sync_old", cancel)
+            .await?;
+        merge_batch_result(&old_result, &mut success_ids, &mut failed_ids);
+
+        let total = after_ids.len();
+        self.emit_job_state(
+            ctx,
+            "running",
+            Some("sync_old"),
+            Some(json!({"current": total, "total": total})),
+            None,
+        );
+        eprintln!(
+            "[sync_full] 全量同步结束: total={}, failed={}",
+            total,
+            failed_ids.len()
+        );
+
+        Ok(json!({
+            "total": total,
+            "failed": failed_ids.len(),
+            "progress": { "current": total, "total": total },
+        }))
+    }
+
+    /// 批量同步对话
+    async fn sync_conversation_batch(
+        self: &Arc<Self>,
+        parent_ctx: &JobContext,
+        conv_ids: &[String],
+        phase: &str,
+        cancel: &CancellationToken,
+    ) -> Result<BatchResult, String> {
+        let total = conv_ids.len();
+        if total == 0 {
+            self.emit_job_state(
+                parent_ctx,
+                "running",
+                Some(phase),
+                Some(json!({"current": 0, "total": 0})),
+                None,
+            );
+            return Ok(BatchResult::default());
+        }
+
+        let mut succeeded = Vec::new();
+        let mut failed = Vec::new();
+
+        eprintln!("[{}] 进度: 0/{}", phase, total);
+
+        for (idx, cid) in conv_ids.iter().enumerate() {
+            let sub_ctx = JobContext {
+                job_id: format!("{}:conv:{}:{}", parent_ctx.job_id, phase, cid),
+                job_type: "sync_conversation".to_string(),
+                account_id: parent_ctx.account_id.clone(),
+                conversation_id: Some(cid.clone()),
+            };
+
+            self.emit_job_state(
+                &sub_ctx,
+                "running",
+                Some(phase),
+                Some(json!({"current": idx, "total": total})),
+                None,
+            );
+
+            match self.execute_sync_conversation(&sub_ctx, cancel).await {
+                Ok(_) => {
+                    self.emit_job_state(
+                        &sub_ctx,
+                        "done",
+                        Some(phase),
+                        Some(json!({"current": idx + 1, "total": total})),
+                        None,
+                    );
+                    succeeded.push(cid.clone());
+                }
+                Err(e) => {
+                    if cancel.is_cancelled() || is_cancelled_error(&e) {
+                        return Err(e);
                     }
-                    return Err(format!("worker 请求超时: {}", method));
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    if attempts < 2 {
-                        continue;
+                    if is_backoff_limit_error(&e) {
+                        self.emit_job_state(
+                            &sub_ctx,
+                            "failed",
+                            Some(phase),
+                            Some(json!({"current": idx + 1, "total": total})),
+                            Some(to_error_payload(&e)),
+                        );
+                        return Err(e);
                     }
-                    return Err("worker 响应通道断开".to_string());
+                    self.emit_job_state(
+                        &sub_ctx,
+                        "failed",
+                        Some(phase),
+                        Some(json!({"current": idx + 1, "total": total})),
+                        Some(to_error_payload(&e)),
+                    );
+                    failed.push(cid.clone());
                 }
             }
+
+            if cancel.is_cancelled() {
+                return Err(format!(
+                    "用户取消，已处理 {}/{} 个对话",
+                    idx + 1,
+                    total
+                ));
+            }
+
+            self.emit_job_state(
+                parent_ctx,
+                "running",
+                Some(phase),
+                Some(json!({"current": idx + 1, "total": total})),
+                None,
+            );
+
+            eprintln!(
+                "[{}] 进度: {}/{} ok={} fail={} cid={}",
+                phase, idx + 1, total, succeeded.len(), failed.len(), cid
+            );
+        }
+
+        Ok(BatchResult { succeeded, failed })
+    }
+
+    async fn execute_sync_incremental(
+        self: &Arc<Self>,
+        ctx: &JobContext,
+        cancel: &CancellationToken,
+    ) -> Result<Value, String> {
+        // 增量同步 = sync_list(stop_on_unchanged=true) + 对有更新的会话逐个 sync_conversation
+        let account_id = &ctx.account_id;
+
+        // 1) 同步列表
+        let list_result = self.execute_sync_list(ctx, true, cancel).await?;
+        let updated_ids: Vec<String> = list_result
+            .get("updatedIds")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // 2) 同步有更新的会话
+        if !updated_ids.is_empty() {
+            eprintln!(
+                "[sync_incremental] 需要更新 {} 个会话",
+                updated_ids.len()
+            );
+            let _ = self
+                .sync_conversation_batch(ctx, &updated_ids, "sync_updated", cancel)
+                .await?;
+        }
+
+        // 3) 补齐空会话
+        let items = load_conversation_items(&self.output_dir, account_id);
+        let empty_ids: Vec<String> = collect_empty_conversation_ids(&items);
+        if !empty_ids.is_empty() {
+            eprintln!("[sync_incremental] 补齐 {} 个空会话", empty_ids.len());
+            let _ = self
+                .sync_conversation_batch(ctx, &empty_ids, "sync_empty", cancel)
+                .await?;
+        }
+
+        Ok(json!({}))
+    }
+
+    /// 分发任务
+    async fn execute_job(
+        self: &Arc<Self>,
+        ctx: &JobContext,
+        cancel: &CancellationToken,
+    ) -> Result<Value, String> {
+        match ctx.job_type.as_str() {
+            "sync_list" => self.execute_sync_list(ctx, false, cancel).await,
+            "sync_conversation" => self.execute_sync_conversation(ctx, cancel).await,
+            "sync_full" => self.execute_sync_full(ctx, cancel).await,
+            "sync_incremental" => self.execute_sync_incremental(ctx, cancel).await,
+            _ => Err(format!("未知任务类型: {}", ctx.job_type)),
         }
     }
 
-    fn ping(self: &Arc<Self>) -> Result<(), String> {
-        self.request("ping", Value::Object(Default::default()), Duration::from_secs(5))
-            .map(|_| ())
-    }
+    /// 提交任务
+    async fn enqueue(self: &Arc<Self>, req: &EnqueueJobRequest) -> Result<String, String> {
+        let job_id = format!(
+            "job_{}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            self.next_job_id.fetch_add(1, Ordering::SeqCst)
+        );
 
-    fn shutdown(self: &Arc<Self>) {
-        self.shutting_down.store(true, Ordering::SeqCst);
-        let _ = self.request("shutdown", Value::Object(Default::default()), Duration::from_secs(2));
-
-        let process_opt = {
-            let mut inner = match self.inner.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            inner.process.take()
+        let ctx = JobContext {
+            job_id: job_id.clone(),
+            job_type: req.job_type.clone(),
+            account_id: req.account_id.trim().to_string(),
+            conversation_id: req
+                .conversation_id
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         };
 
-        if let Some(proc_ref) = process_opt {
-            if let Ok(mut child_guard) = proc_ref.child.lock() {
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                loop {
-                    match child_guard.try_wait() {
-                        Ok(Some(_)) => break,
-                        Ok(None) => {
-                            if std::time::Instant::now() >= deadline {
-                                let _ = child_guard.kill();
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(100));
-                        }
-                        Err(_) => {
-                            let _ = child_guard.kill();
-                            break;
-                        }
-                    }
+        // 创建取消令牌
+        let cancel = CancellationToken::new();
+        {
+            let mut cancels = self.active_cancels.lock().await;
+            cancels.insert(ctx.account_id.clone(), cancel.clone());
+        }
+
+        self.emit_job_state(&ctx, "queued", None, None, None);
+
+        let host = Arc::clone(self);
+        let account_id_for_cleanup = ctx.account_id.clone();
+
+        tokio::spawn(async move {
+            host.emit_job_state(&ctx, "running", None, None, None);
+
+            let result = host.execute_job(&ctx, &cancel).await;
+
+            match result {
+                Ok(result_val) => {
+                    let done_progress = result_val.get("progress").cloned();
+                    host.emit_job_state(&ctx, "done", None, done_progress, None);
                 }
+                Err(ref e) if cancel.is_cancelled() || is_cancelled_error(e) => {
+                    eprintln!("任务被用户取消: {}", e);
+                    host.emit_job_state(&ctx, "cancelled", None, None, None);
+                }
+                Err(ref e) if is_backoff_limit_error(e) => {
+                    eprintln!("任务因退避兜底提前结束: {}", e);
+                    host.emit_job_state(
+                        &ctx,
+                        "failed",
+                        None,
+                        None,
+                        Some(to_error_payload(e)),
+                    );
+                }
+                Err(ref e) => {
+                    eprintln!("任务失败: {}", e);
+                    host.emit_job_state(
+                        &ctx,
+                        "failed",
+                        None,
+                        None,
+                        Some(to_error_payload(e)),
+                    );
+                }
+            }
+
+            // 清理取消令牌
+            let mut cancels = host.active_cancels.lock().await;
+            cancels.remove(&account_id_for_cleanup);
+        });
+
+        Ok(job_id)
+    }
+
+    /// 取消指定账号的活跃任务
+    async fn cancel_account_job(&self, account_id: &str) {
+        let cancels = self.active_cancels.lock().await;
+        if let Some(token) = cancels.get(account_id) {
+            token.cancel();
+            eprintln!("已发送取消信号: account={}", account_id);
+        }
+    }
+
+    fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        // 所有活跃令牌取消
+        if let Ok(cancels) = self.active_cancels.try_lock() {
+            for (_, token) in cancels.iter() {
+                token.cancel();
             }
         }
     }
 }
 
+// ============================================================================
+// 全局单例
+// ============================================================================
+
 static HOST: OnceLock<Arc<WorkerHost>> = OnceLock::new();
 
-pub fn init_worker_host(
-    app: AppHandle,
-    python_bin: String,
-    worker_script: PathBuf,
-    output_dir: PathBuf,
-) -> Result<(), String> {
-    let host = Arc::new(WorkerHost::new(app, python_bin, worker_script, output_dir));
-    host.ensure_process()?;
-    host.ping()?;
-    HOST.set(host).map_err(|_| "WorkerHost 已初始化".to_string())
+pub fn init_worker_host(app: AppHandle, output_dir: PathBuf) -> Result<(), String> {
+    let host = Arc::new(WorkerHost::new(app, output_dir));
+    HOST.set(host)
+        .map_err(|_| "WorkerHost 已初始化".to_string())
 }
 
 fn get_host() -> Result<Arc<WorkerHost>, String> {
@@ -573,20 +728,191 @@ fn get_host() -> Result<Arc<WorkerHost>, String> {
         .ok_or_else(|| "WorkerHost 未初始化".to_string())
 }
 
-pub fn enqueue_job(req: EnqueueJobRequest) -> Result<String, String> {
+pub async fn enqueue_job_async(req: EnqueueJobRequest) -> Result<String, String> {
     req.validate()?;
     let host = get_host()?;
-    let params = serde_json::to_value(req).map_err(|e| e.to_string())?;
-    let result = host.request("enqueue_job", params, Duration::from_secs(20))?;
-    result
-        .get("jobId")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "worker 返回缺少 jobId".to_string())
+    host.enqueue(&req).await
+}
+
+pub async fn cancel_job_async(account_id: &str) -> Result<(), String> {
+    let host = get_host()?;
+    host.cancel_account_job(account_id).await;
+    Ok(())
 }
 
 pub fn shutdown_worker_host() {
     if let Some(host) = HOST.get() {
         host.shutdown();
     }
+}
+
+// ============================================================================
+// 辅助函数
+// ============================================================================
+
+#[derive(Default)]
+struct BatchResult {
+    succeeded: Vec<String>,
+    failed: Vec<String>,
+}
+
+fn merge_batch_result(
+    result: &BatchResult,
+    success_ids: &mut std::collections::HashSet<String>,
+    failed_ids: &mut std::collections::HashSet<String>,
+) {
+    success_ids.extend(result.succeeded.iter().cloned());
+    failed_ids.extend(result.failed.iter().cloned());
+    for id in &result.succeeded {
+        failed_ids.remove(id);
+    }
+}
+
+fn is_session_expired_error(e: &str) -> bool {
+    // ProtocolError::SessionExpired → "HTTP 200 但响应数据为空（session/cookie 已过期）"
+    e.contains("HTTP 200 但响应数据为空")
+}
+
+fn is_backoff_limit_error(e: &str) -> bool {
+    // ProtocolError::RequestBackoffLimitReached → "请求连续失败触发最终退避兜底"
+    e.contains("请求连续失败")
+}
+
+fn is_cancelled_error(e: &str) -> bool {
+    e.contains("用户取消") || e.contains("cancelled")
+}
+
+fn to_error_payload(e: &str) -> Value {
+    if is_backoff_limit_error(e) {
+        json!({
+            "code": "REQUEST_BACKOFF_LIMIT",
+            "message": e,
+            "retryable": false,
+        })
+    } else {
+        json!({
+            "code": "WORKER_ERROR",
+            "message": e,
+            "retryable": false,
+        })
+    }
+}
+
+/// 读取 conversations.json 的 items
+fn load_conversation_items(output_dir: &Path, account_id: &str) -> Vec<Value> {
+    let conv_index = output_dir
+        .join("accounts")
+        .join(account_id)
+        .join("conversations.json");
+    if !conv_index.exists() {
+        return Vec::new();
+    }
+    std::fs::read_to_string(&conv_index)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+        .and_then(|d| d.get("items")?.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.is_object())
+        .collect()
+}
+
+/// 从 items 提取有效会话 ID（排除 lost）
+fn load_conversation_ids(items: &[Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in items {
+        let status = row
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("normal");
+        if status == "lost" {
+            continue;
+        }
+        if let Some(cid) = row.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if seen.insert(cid.to_string()) {
+                out.push(cid.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// 收集 JSONL 中有失败标记的对话 ID
+fn collect_failed_conversation_ids(
+    output_dir: &Path,
+    account_id: &str,
+    items: &[Value],
+) -> Vec<String> {
+    let conv_dir = output_dir
+        .join("accounts")
+        .join(account_id)
+        .join("conversations");
+    let mut ids = std::collections::HashSet::new();
+
+    let item_map: HashMap<String, &Value> = items
+        .iter()
+        .filter_map(|row| {
+            let cid = row.get("id")?.as_str()?.trim().to_string();
+            if cid.is_empty() {
+                None
+            } else {
+                Some((cid, row))
+            }
+        })
+        .collect();
+
+    if conv_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&conv_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if content.contains("\"downloadFailed\": true")
+                        || content.contains("\"downloadFailed\":true")
+                    {
+                        let cid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        if !cid.is_empty() {
+                            if let Some(row) = item_map.get(cid) {
+                                let status = row
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("normal");
+                                if status != "lost" {
+                                    ids.insert(cid.to_string());
+                                }
+                            } else {
+                                ids.insert(cid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ids.into_iter().collect()
+}
+
+/// 收集 messageCount=0 的空对话
+fn collect_empty_conversation_ids(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|row| {
+            let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("normal");
+            if status == "lost" {
+                return None;
+            }
+            let msg_count = row.get("messageCount").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if msg_count != 0 {
+                return None;
+            }
+            row.get("id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
+        .collect()
 }

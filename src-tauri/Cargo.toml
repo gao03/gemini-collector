@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "gemini-collector"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -51,6 +52,9 @@ reqwest = { version = "0.12", features = ["rustls-tls"], default-features = fals
 
 # gemini_api module dependencies
 rand = "0.9"
+
+# worker / export_cli module dependencies
+arc-swap = "1"
 
 # cookie-verify binary needs a tokio runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
