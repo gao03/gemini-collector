@@ -3,6 +3,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Conversation, ConversationSummary } from "../data/types";
 import { useTheme } from "../theme";
 
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
+const TOP_BAR_HEIGHT = IS_WINDOWS ? 36 : 52;
+
 function formatUpdatedAt(iso: string): string {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -51,7 +54,7 @@ export function TopBar({
     <div
       data-tauri-drag-region
       style={{
-        height: 52,
+        height: TOP_BAR_HEIGHT,
         flexShrink: 0,
         display: "flex",
         alignItems: "center",
