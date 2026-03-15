@@ -11,7 +11,7 @@ pub mod turn_parser;
 mod worker_host;
 
 use std::path::Path;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use worker_host::EnqueueJobRequest;
 
 use export::{resolve_account_id_arg, value_to_non_empty_string};
@@ -364,6 +364,273 @@ fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
 // ============================================================================
 // Tauri 命令：Worker
 // ============================================================================
+
+// ============================================================================
+// Tauri 命令：WebView 登录（Windows 专用）
+// ============================================================================
+
+/// 通过 with_webview() + ICoreWebView2CookieManager 提取 Cookie（Windows 专用）。
+/// 同时请求 gemini.google.com 和 accounts.google.com 的 cookie 并合并。
+/// 返回 HashMap<String, String>（cookie name → value）。
+#[cfg(target_os = "windows")]
+fn extract_cookies_via_cookie_manager(
+    webview_window: &tauri::WebviewWindow,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    use std::collections::HashMap;
+
+    // 需要提取 cookie 的 URL 列表
+    let urls = vec![
+        "https://gemini.google.com\0",
+        "https://accounts.google.com\0",
+        "https://www.google.com\0",
+    ];
+
+    let mut all_cookies = HashMap::new();
+
+    for url in &urls {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<HashMap<String, String>, String>>();
+        let url_owned = url.to_string();
+
+        webview_window
+            .with_webview(move |platform_webview| {
+                use webview2_com::GetCookiesCompletedHandler;
+                use webview2_com::Microsoft::Web::WebView2::Win32::*;
+                use windows_core::{Interface, PCWSTR};
+
+                unsafe {
+                    let controller = platform_webview.controller();
+                    let core: ICoreWebView2 = controller.CoreWebView2().unwrap();
+                    let core2: ICoreWebView2_2 = core.cast().unwrap();
+                    let cookie_manager = core2.CookieManager().unwrap();
+
+                    let tx_clone = tx.clone();
+                    let handler = GetCookiesCompletedHandler::create(Box::new(
+                        move |hr, cookie_list| {
+                            if hr.is_err() {
+                                let _ =
+                                    tx_clone.send(Err(format!("GetCookies HRESULT: {:?}", hr)));
+                                return Ok(());
+                            }
+                            let mut cookies = HashMap::new();
+                            if let Some(list) = cookie_list {
+                                let mut count: u32 = 0;
+                                list.Count(&mut count).ok();
+                                for i in 0..count {
+                                    if let Ok(cookie) = list.GetValueAtIndex(i) {
+                                        let mut name_ptr = windows_core::PWSTR::null();
+                                        let mut value_ptr = windows_core::PWSTR::null();
+                                        let mut domain_ptr = windows_core::PWSTR::null();
+                                        cookie.Name(&mut name_ptr).ok();
+                                        cookie.Value(&mut value_ptr).ok();
+                                        cookie.Domain(&mut domain_ptr).ok();
+                                        let name = name_ptr.to_string().unwrap_or_default();
+                                        let value = value_ptr.to_string().unwrap_or_default();
+                                        let domain = domain_ptr.to_string().unwrap_or_default();
+                                        if domain.contains("google.com") {
+                                            cookies.insert(name, value);
+                                        }
+                                    }
+                                }
+                            }
+                            let _ = tx_clone.send(Ok(cookies));
+                            Ok(())
+                        },
+                    ));
+
+                    let uri_wide: Vec<u16> = url_owned.encode_utf16().collect();
+                    cookie_manager
+                        .GetCookies(PCWSTR(uri_wide.as_ptr()), &handler)
+                        .unwrap();
+                }
+            })
+            .map_err(|e| format!("with_webview 失败: {}", e))?;
+
+        let cookies = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| "Cookie 提取超时".to_string())??;
+
+        log::info!(
+            "GetCookies for {} returned {} cookies",
+            url.trim_end_matches('\0'),
+            cookies.len()
+        );
+        all_cookies.extend(cookies);
+    }
+
+    Ok(all_cookies)
+}
+
+/// Windows：弹出 WebView2 登录窗口，用户登录 Gemini 后自动提取 Cookie 并创建账号。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn open_google_login(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::webview::PageLoadEvent;
+
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let webview_data_dir = data_dir.join("webview_session");
+    std::fs::create_dir_all(&webview_data_dir).map_err(|e| e.to_string())?;
+
+    // 防止重复打开
+    if app.get_webview_window("google_login").is_some() {
+        return Err("登录窗口已打开".to_string());
+    }
+
+    // 用 mpsc channel 接收 on_page_load 中的导航完成信号
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(4);
+
+    let login_window = tauri::WebviewWindowBuilder::new(
+        &app,
+        "google_login",
+        tauri::WebviewUrl::External(
+            "https://gemini.google.com/app"
+                .parse()
+                .expect("invalid login URL"),
+        ),
+    )
+    .title("使用 Google 登录 Gemini")
+    .inner_size(500.0, 700.0)
+    .data_directory(webview_data_dir.clone())
+    .on_page_load(move |_webview, payload| {
+        if !matches!(payload.event(), PageLoadEvent::Finished) {
+            return;
+        }
+        let url_str = payload.url().to_string();
+        if let Ok(url) = url::Url::parse(&url_str) {
+            if url.host_str() == Some("gemini.google.com") && url.path().starts_with("/app") {
+                let _ = tx.try_send(());
+            }
+        }
+    })
+    .build()
+    .map_err(|e| format!("创建登录窗口失败: {}", e))?;
+
+    let key_cookies = ["__Secure-1PSID", "__Secure-1PSIDTS"];
+
+    // 等待登录成功（通过 CookieManager 验证）或用户关闭窗口
+    let cookies = loop {
+        match rx.recv().await {
+            Some(()) => {
+                log::info!("检测到用户到达 gemini.google.com/app，通过 CookieManager 提取 Cookie...");
+
+                // 通过 with_webview → ICoreWebView2CookieManager 提取 Cookie
+                match extract_cookies_via_cookie_manager(&login_window) {
+                    Ok(c) if key_cookies.iter().any(|k| c.contains_key(*k)) => {
+                        let keys: Vec<_> = c.keys().cloned().collect();
+                        log::info!("CookieManager 提取成功，共 {} 个 cookie, keys={:?}", c.len(), keys);
+                        break c;
+                    }
+                    Ok(c) => {
+                        log::info!(
+                            "已提取 {} 个 cookies，缺少关键登录态，继续等待",
+                            c.len()
+                        );
+                    }
+                    Err(e) => log::warn!("CookieManager 提取失败: {}", e),
+                }
+            }
+            None => {
+                let _ = app.emit("login_cancelled", ());
+                return Err("用户取消登录".to_string());
+            }
+        }
+    };
+
+    // 登录成功 → 立即隐藏窗口（保持 WebView2 实例存活，用于后续 session 刷新）
+    let _ = login_window.hide();
+
+    // 通过 ListAccounts 获取 email
+    log::info!("开始调用 ListAccounts，cookie 数量={}", cookies.len());
+    let mappings = match cookies::list_accounts::discover_email_authuser_mapping(&cookies).await {
+        Ok(m) => {
+            log::info!("ListAccounts 返回 {} 个账号映射: {:?}", m.len(), m);
+            m
+        }
+        Err(e) => {
+            log::warn!("ListAccounts 调用失败: {}", e);
+            return Err(format!("账号发现失败: {}", e));
+        }
+    };
+
+    if mappings.is_empty() {
+        log::warn!("ListAccounts 返回空映射，关闭登录窗口");
+        let _ = login_window.close();
+        return Err("未发现已登录的 Gemini 账号".to_string());
+    }
+
+    // 写入账号数据（单账户，取第一个）
+    let m = &mappings[0];
+    let account_id = protocol::email_to_account_id(&m.email);
+    log::info!("写入账号数据: email={}, account_id={}", m.email, account_id);
+    let account_dir = data_dir.join("accounts").join(&account_id);
+    std::fs::create_dir_all(account_dir.join("conversations")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(account_dir.join("media")).map_err(|e| e.to_string())?;
+
+    let name = m
+        .email
+        .split('@')
+        .next()
+        .unwrap_or(&account_id)
+        .to_string();
+    let avatar_text = name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
+
+    let info = serde_json::json!({
+        "version": 1,
+        "id": account_id,
+        "email": m.email,
+        "name": name,
+        "avatarText": avatar_text,
+        "avatarColor": "#667eea",
+        "conversationCount": 0,
+        "remoteConversationCount": serde_json::Value::Null,
+        "lastSyncAt": serde_json::Value::Null,
+        "lastSyncResult": serde_json::Value::Null,
+        "authuser": m.authuser,
+    });
+
+    storage::write_accounts_json(&data_dir, &info).map_err(|e| {
+        log::warn!("写入 accounts.json 失败: {}", e);
+        e.to_string()
+    })?;
+    storage::write_account_meta(&account_dir, &info).map_err(|e| {
+        log::warn!("写入 meta.json 失败: {}", e);
+        e.to_string()
+    })?;
+    log::info!("账号数据写入成功，关闭登录窗口并通知前端");
+
+    // 将 cookies 注入 WorkerHost，供后续同步任务使用
+    if let Err(e) = worker_host::set_worker_cookies(cookies).await {
+        log::warn!("注入 cookies 到 WorkerHost 失败: {}", e);
+    } else {
+        log::info!("cookies 已注入 WorkerHost");
+    }
+
+    // 彻底销毁登录窗口
+    let _ = login_window.close();
+
+    // 通知前端登录完成
+    let _ = app.emit(
+        "login_complete",
+        serde_json::json!({ "accountId": account_id }),
+    );
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "accountId": account_id,
+        "email": m.email,
+    })
+    .to_string())
+}
+
+/// 非 Windows 平台：WebView 登录不可用。
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn open_google_login(_app: tauri::AppHandle) -> Result<String, String> {
+    Err("WebView 登录仅支持 Windows 平台".to_string())
+}
 
 /// 从本机浏览器读取 cookies，发现所有 Gemini 账号并写入 accounts.json。
 #[tauri::command]
@@ -886,6 +1153,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_accounts,
+            open_google_login,
             run_accounts_import,
             reload_accounts_import,
             enqueue_job,

@@ -12,6 +12,7 @@ import { ThemeContext, lightTheme, darkTheme } from "./theme";
 
 type Screen = "account-picker" | "chat";
 type ConversationSortMode = "updated_desc" | "size_desc" | "media_desc" | "created_desc";
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const AUTO_SYNC_RETRY_MS = 60 * 1000;
 const AUTO_SYNC_STALE_MS = 24 * 60 * 60 * 1000;
 const AUTO_SYNC_TRACK_MAX = 500;
@@ -346,7 +347,11 @@ function App() {
     setAccountsLoading(true);
     setAccountsImportError(null);
     try {
-      await invoke("reload_accounts_import");
+      if (IS_WINDOWS) {
+        await invoke("open_google_login");
+      } else {
+        await invoke("reload_accounts_import");
+      }
     } catch (e: unknown) {
       const msg = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
       setAccountsImportError(msg);
@@ -385,7 +390,11 @@ function App() {
         let loaded = parseAccountsPayload(await invoke<string>("load_accounts"));
         if (loaded.length === 0) {
           try {
-            await invoke("run_accounts_import");
+            if (IS_WINDOWS) {
+              await invoke("open_google_login");
+            } else {
+              await invoke("run_accounts_import");
+            }
           } catch (e: unknown) {
             console.error("自动导入账号失败:", e);
             const msg = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);

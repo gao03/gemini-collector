@@ -62,7 +62,7 @@ fn decrypt_v10(data: &[u8], derived_key: &[u8]) -> Result<String> {
 }
 
 /// v20: AES-256-GCM, nonce = first 12 bytes
-fn decrypt_v20(data: &[u8], key: &[u8]) -> Result<String> {
+pub(crate) fn decrypt_v20(data: &[u8], key: &[u8]) -> Result<String> {
     use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 
     if data.len() < 12 + 16 {
@@ -190,7 +190,13 @@ fn get_windows_local_state_key(browser_name: &str) -> Result<Vec<u8>> {
         _ => bail!("Unknown browser for Local State: {}", browser_name),
     };
 
-    let content = std::fs::read_to_string(&local_state_path)
+    get_local_state_key(&local_state_path)
+}
+
+/// Decrypt the AES key from any Chromium-based Local State file (Chrome, WebView2, etc.).
+#[cfg(target_os = "windows")]
+pub fn get_local_state_key(local_state_path: &std::path::Path) -> Result<Vec<u8>> {
+    let content = std::fs::read_to_string(local_state_path)
         .with_context(|| format!("Failed to read {}", local_state_path.display()))?;
 
     let json: serde_json::Value = serde_json::from_str(&content)?;

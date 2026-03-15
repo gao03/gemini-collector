@@ -109,24 +109,43 @@ impl WorkerHost {
         }
     }
 
-    /// 读取本机浏览器 cookies（带缓存）
+    /// 读取 cookies（带缓存）。
+    /// Windows 上由 open_google_login 登录成功后通过 set_cookies 注入；
+    /// macOS/Linux 上从本机浏览器读取。
     async fn get_cookies(&self) -> Result<HashMap<String, String>, String> {
         let mut cache = self.cookies_cache.lock().await;
         if let Some(ref c) = *cache {
             return Ok(c.clone());
         }
-        let cookies = tokio::task::spawn_blocking(|| {
-            cookies::get_cookies_from_local_browser()
-        })
-        .await
-        .map_err(|e| format!("cookies 读取任务失败: {}", e))?
-        .map_err(|e| format!("cookies 读取失败: {}", e))?;
 
-        if cookies.is_empty() {
-            return Err("本机浏览器 cookies 读取结果为空".to_string());
+        #[cfg(target_os = "windows")]
+        {
+            return Err("Windows 上需要先通过 WebView2 登录获取 cookies（请点击登录按钮）".to_string());
         }
-        *cache = Some(cookies.clone());
-        Ok(cookies)
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let cookies = tokio::task::spawn_blocking(|| {
+                cookies::get_cookies_from_local_browser()
+            })
+            .await
+            .map_err(|e| format!("cookies 读取任务失败: {}", e))?
+            .map_err(|e| format!("cookies 读取失败: {}", e))?;
+
+            if cookies.is_empty() {
+                return Err("本机浏览器 cookies 读取结果为空".to_string());
+            }
+            *cache = Some(cookies.clone());
+            Ok(cookies)
+        }
+    }
+
+    /// 外部注入 cookies（Windows WebView2 登录后使用）
+    pub async fn set_cookies(&self, cookies: HashMap<String, String>) {
+        let mut cache = self.cookies_cache.lock().await;
+        *cache = Some(cookies);
+        // 清空已有 session，下次任务会用新 cookies 重建
+        self.sessions.lock().await.clear();
     }
 
     /// 从 accounts.json 读取指定账号的 authuser 和 email
@@ -739,6 +758,13 @@ pub async fn enqueue_job_async(req: EnqueueJobRequest) -> Result<String, String>
 pub async fn cancel_job_async(account_id: &str) -> Result<(), String> {
     let host = get_host()?;
     host.cancel_account_job(account_id).await;
+    Ok(())
+}
+
+/// 注入 cookies 到 WorkerHost 缓存（Windows WebView2 登录后调用）
+pub async fn set_worker_cookies(cookies: HashMap<String, String>) -> Result<(), String> {
+    let host = get_host()?;
+    host.set_cookies(cookies).await;
     Ok(())
 }
 
