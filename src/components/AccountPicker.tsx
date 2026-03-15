@@ -9,9 +9,11 @@ interface AccountPickerProps {
   onSelect: (account: Account) => void;
   isDark: boolean;
   onToggleDark: () => void;
+  onReload?: () => void;
+  reloading?: boolean;
 }
 
-export function AccountPicker({ accounts, loading, importError, onSelect, isDark, onToggleDark }: AccountPickerProps) {
+export function AccountPicker({ accounts, loading, importError, onSelect, isDark, onToggleDark, onReload, reloading }: AccountPickerProps) {
   const t = useTheme();
 
   return (
@@ -41,6 +43,26 @@ export function AccountPicker({ accounts, loading, importError, onSelect, isDark
         <div style={{ fontSize: 22, fontWeight: 700, color: t.text, letterSpacing: -0.3 }}>Gemini Chat</div>
         <div style={{ fontSize: 13, color: t.textSub, marginTop: 4 }}>选择要使用的账号</div>
       </div>
+
+      {/* Reload icon — right above the card */}
+      {onReload && (
+        <button
+          onClick={onReload}
+          disabled={reloading || loading}
+          title="重新检测账号"
+          style={{ marginBottom: 6, background: "transparent", border: "none", cursor: reloading || loading ? "default" : "pointer", padding: 6, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", opacity: reloading || loading ? 0.4 : 0.5, transition: "opacity 0.15s" }}
+          onMouseEnter={(e) => { if (!reloading && !loading) (e.currentTarget as HTMLElement).style.opacity = "0.85"; }}
+          onMouseLeave={(e) => { if (!reloading && !loading) (e.currentTarget as HTMLElement).style.opacity = "0.5"; }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={t.textSub} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+            style={{ animation: reloading ? "spin 0.9s linear infinite" : "none" }}>
+            <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+            <polyline points="23 4 23 10 17 10" />
+            <polyline points="1 20 1 14 7 14" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+        </button>
+      )}
 
       {/* Content area */}
       <div style={{ width: 360, background: t.cardBg, borderRadius: 16, boxShadow: t.isDark ? "0 16px 34px rgba(5,10,20,0.42)" : "0 16px 34px rgba(70,102,156,0.2)", backdropFilter: "blur(32px) saturate(115%)", WebkitBackdropFilter: "blur(32px) saturate(115%)", overflow: "hidden", minHeight: 64 }}>

@@ -434,6 +434,137 @@ async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
     .to_string())
 }
 
+/// 重新检测账号：重读 Chrome cookies，完整替换 accounts.json（只保留本次发现的账号），
+/// 并保留各账号已有的同步数据（conversationCount / lastSyncAt 等）。
+#[tauri::command]
+async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+
+    let all_cookies = tokio::task::spawn_blocking(|| cookies::get_cookies_from_local_browser())
+        .await
+        .map_err(|e| format!("cookies 读取任务失败: {}", e))?
+        .map_err(|e| format!("cookies 读取失败: {}", e))?;
+
+    if all_cookies.is_empty() {
+        return Err("未能从浏览器读取到 cookies，请确保 Chrome 已登录 Gemini".to_string());
+    }
+
+    let mappings = cookies::list_accounts::discover_email_authuser_mapping(&all_cookies)
+        .await
+        .map_err(|e| format!("账号发现失败: {}", e))?;
+
+    if mappings.is_empty() {
+        return Err("未发现已登录的 Gemini 账号".to_string());
+    }
+
+    // 读取现有 accounts.json，保留 addedAt
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let existing_entries: std::collections::HashMap<String, serde_json::Value> = {
+        let f = data_dir.join("accounts.json");
+        if f.exists() {
+            std::fs::read_to_string(&f).ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                .and_then(|d| d.get("accounts")?.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| {
+                    let id = v.get("id")?.as_str()?.to_string();
+                    Some((id, v))
+                })
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        }
+    };
+
+    let mut new_account_entries: Vec<serde_json::Value> = Vec::new();
+    let mut imported_ids: Vec<String> = Vec::new();
+
+    for m in &mappings {
+        let account_id = protocol::email_to_account_id(&m.email);
+        let account_dir = data_dir.join("accounts").join(&account_id);
+        std::fs::create_dir_all(account_dir.join("conversations")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(account_dir.join("media")).map_err(|e| e.to_string())?;
+
+        // 读取现有 meta.json，保留同步字段
+        let existing_meta: serde_json::Value = {
+            let f = account_dir.join("meta.json");
+            if f.exists() {
+                std::fs::read_to_string(&f).ok()
+                    .and_then(|c| serde_json::from_str(&c).ok())
+                    .unwrap_or(serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            }
+        };
+        let get_meta = |key: &str| -> serde_json::Value {
+            existing_meta.get(key).cloned().unwrap_or(serde_json::Value::Null)
+        };
+
+        let name = existing_meta.get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| m.email.split('@').next().unwrap_or(&account_id))
+            .to_string();
+        let avatar_text = name.chars().next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string());
+        let avatar_color = existing_meta.get("avatarColor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("#667eea")
+            .to_string();
+
+        let meta = serde_json::json!({
+            "version": 1,
+            "id": account_id,
+            "email": m.email,
+            "name": name,
+            "avatarText": avatar_text,
+            "avatarColor": avatar_color,
+            "conversationCount": get_meta("conversationCount"),
+            "remoteConversationCount": get_meta("remoteConversationCount"),
+            "lastSyncAt": get_meta("lastSyncAt"),
+            "lastSyncResult": get_meta("lastSyncResult"),
+            "authuser": m.authuser,
+        });
+        std::fs::write(
+            account_dir.join("meta.json"),
+            serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+        ).map_err(|e| e.to_string())?;
+
+        let added_at = existing_entries.get(&account_id)
+            .and_then(|v| v.get("addedAt").and_then(|v| v.as_str()))
+            .unwrap_or(&now_iso)
+            .to_string();
+
+        new_account_entries.push(serde_json::json!({
+            "id": account_id,
+            "email": m.email,
+            "addedAt": added_at,
+            "dataDir": format!("accounts/{}", account_id),
+            "authuser": m.authuser,
+        }));
+        imported_ids.push(account_id);
+    }
+
+    // 完整替换 accounts.json（只保留本次发现的账号）
+    let accounts_data = serde_json::json!({
+        "version": 1,
+        "updatedAt": now_iso,
+        "accounts": new_account_entries,
+    });
+    std::fs::write(
+        data_dir.join("accounts.json"),
+        serde_json::to_string_pretty(&accounts_data).map_err(|e| e.to_string())?,
+    ).map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "imported": imported_ids.len(),
+        "accounts": imported_ids,
+    }).to_string())
+}
+
 #[tauri::command]
 async fn enqueue_job(req: EnqueueJobRequest) -> Result<String, String> {
     worker_host::enqueue_job_async(req).await
@@ -740,6 +871,7 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .max_file_size(5_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .level(log::LevelFilter::Debug)
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
@@ -755,6 +887,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_accounts,
             run_accounts_import,
+            reload_accounts_import,
             enqueue_job,
             cancel_job,
             export::get_account_export_stats,
