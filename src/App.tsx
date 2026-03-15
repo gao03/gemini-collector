@@ -13,6 +13,10 @@ import { ThemeContext, lightTheme, darkTheme } from "./theme";
 type Screen = "account-picker" | "chat";
 type ConversationSortMode = "updated_desc" | "size_desc" | "media_desc" | "created_desc";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
+// Windows 有原生标题栏占空间，zoom 1.05 会导致底部溢出；同时 52px 拖拽区域是 macOS overlay 专用
+if (IS_WINDOWS) {
+  document.body.style.zoom = "1";
+}
 const AUTO_SYNC_RETRY_MS = 60 * 1000;
 const AUTO_SYNC_STALE_MS = 24 * 60 * 60 * 1000;
 const AUTO_SYNC_TRACK_MAX = 500;
@@ -1008,7 +1012,7 @@ function App() {
         style={{
           display: "flex",
           height: "100vh",
-          width: "100vw",
+          width: "100%",
           overflow: "hidden",
           background: theme.appBg,
           position: "relative",

@@ -19,9 +19,9 @@ export function AccountPicker({ accounts, loading, importError, onSelect, isDark
   const t = useTheme();
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: t.appBg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative" }}>
+    <div style={{ width: "100%", height: "100vh", background: t.appBg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative" }}>
       {/* Drag region for window */}
-      <div data-tauri-drag-region style={{ position: "absolute", top: 0, left: 0, right: 0, height: 52 }} />
+      <div data-tauri-drag-region style={{ position: "absolute", top: 0, left: 0, right: 0, height: IS_WINDOWS ? 8 : 52 }} />
 
       {/* Dark mode toggle */}
       <button

@@ -5,6 +5,9 @@ import { Virtuoso } from "react-virtuoso";
 import { ConversationSummary, Account, SearchResult } from "../data/types";
 import { useTheme } from "../theme";
 
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
+const DRAG_REGION_HEIGHT = IS_WINDOWS ? 8 : 52;
+
 interface SidebarProps {
   conversations: ConversationSummary[];
   conversationSortMode?: "updated_desc" | "size_desc" | "media_desc" | "created_desc";
@@ -196,7 +199,7 @@ export function Sidebar({
       flexShrink: 0,
       position: "relative",
     }}>
-      <div data-tauri-drag-region style={{ height: 52, minWidth: 260, flexShrink: 0 }} />
+      <div data-tauri-drag-region style={{ height: DRAG_REGION_HEIGHT, minWidth: 260, flexShrink: 0 }} />
 
       <div style={{ flex: 1, minHeight: 0, padding: "0 0 4px", minWidth: 260, display: "flex", flexDirection: "column" }}>
         <div style={{ padding: "2px 12px 6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
