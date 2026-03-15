@@ -213,6 +213,11 @@ fn dpapi_decrypt_bytes(data: &[u8]) -> Result<Vec<u8>> {
     use std::ptr;
     use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
 
+    // LocalFree was removed from windows-targets 0.52+; declare it directly.
+    extern "system" {
+        fn LocalFree(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+    }
+
     let mut input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
@@ -242,7 +247,7 @@ fn dpapi_decrypt_bytes(data: &[u8]) -> Result<Vec<u8>> {
         unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
 
     unsafe {
-        windows_sys::Win32::System::Memory::LocalFree(output.pbData as _);
+        LocalFree(output.pbData as _);
     }
 
     Ok(result)
