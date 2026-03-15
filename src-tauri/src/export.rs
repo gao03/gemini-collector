@@ -159,63 +159,68 @@ fn build_account_export_stats(account_dir: &Path, account_id: &str) -> Result<Ac
 // ============================================================================
 
 fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
-    let parent = account_dir
-        .parent()
-        .ok_or_else(|| "账号目录路径异常".to_string())?;
+    use std::io::{Read, Write};
+    use zip::write::SimpleFileOptions;
+
     let folder_name = account_dir
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "账号目录名称异常".to_string())?;
 
-    let ditto_output = std::process::Command::new("ditto")
-        .current_dir(parent)
-        .arg("-c")
-        .arg("-k")
-        .arg("--sequesterRsrc")
-        .arg("--keepParent")
-        .arg(folder_name)
-        .arg(zip_path)
-        .output();
+    let file = std::fs::File::create(zip_path)
+        .map_err(|e| format!("创建 zip 文件失败: {}", e))?;
+    let mut zip_writer = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
 
-    match ditto_output {
-        Ok(output) if output.status.success() => return Ok(()),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let reason = if stderr.is_empty() {
-                format!("ditto 退出码 {:?}", output.status.code())
-            } else {
-                stderr
-            };
-            log::warn!("[export_account_zip] ditto 打包失败，尝试 zip 兜底: {}", reason);
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            log::warn!("[export_account_zip] 系统无 ditto，尝试 zip 兜底");
-        }
-        Err(err) => {
-            log::warn!("[export_account_zip] ditto 执行异常，尝试 zip 兜底: {}", err);
-        }
-    }
+    // 递归收集所有文件
+    let mut entries: Vec<std::path::PathBuf> = Vec::new();
+    collect_files(account_dir, &mut entries)
+        .map_err(|e| format!("遍历目录失败: {}", e))?;
 
-    let zip_output = std::process::Command::new("zip")
-        .current_dir(parent)
-        .arg("-r")
-        .arg("-q")
-        .arg(zip_path)
-        .arg(folder_name)
-        .output()
-        .map_err(|e| format!("zip 执行失败: {}", e))?;
+    for entry_path in &entries {
+        let rel = entry_path
+            .strip_prefix(account_dir)
+            .map_err(|e| format!("路径计算失败: {}", e))?;
+        // zip 内路径以 folder_name/ 为前缀
+        let zip_entry_name = format!("{}/{}", folder_name, rel.to_string_lossy().replace('\\', "/"));
 
-    if zip_output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&zip_output.stderr).trim().to_string();
-        let reason = if stderr.is_empty() {
-            format!("zip 退出码 {:?}", zip_output.status.code())
+        if entry_path.is_dir() {
+            zip_writer
+                .add_directory(&zip_entry_name, options)
+                .map_err(|e| format!("添加目录失败: {}", e))?;
         } else {
-            stderr
-        };
-        Err(format!("zip 打包失败: {}", reason))
+            zip_writer
+                .start_file(&zip_entry_name, options)
+                .map_err(|e| format!("添加文件失败: {}", e))?;
+            let mut f = std::fs::File::open(entry_path)
+                .map_err(|e| format!("打开文件失败: {}", e))?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)
+                .map_err(|e| format!("读取文件失败: {}", e))?;
+            zip_writer
+                .write_all(&buf)
+                .map_err(|e| format!("写入 zip 失败: {}", e))?;
+        }
     }
+
+    zip_writer
+        .finish()
+        .map_err(|e| format!("zip 完成失败: {}", e))?;
+    Ok(())
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, out)?;
+        } else {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
