@@ -1,0 +1,147 @@
+//! Google batchexecute RPC 请求构造 + 响应解析。
+//!
+//! 对应 Python GeminiExporter._batchexecute 方法。
+//! - 构建 f.req / at / bl / fsid / reqid 参数
+//! - POST application/x-www-form-urlencoded
+//! - 响应分发到指定 rpcid
+//! - session 过期检测
+
+use std::sync::atomic::Ordering;
+
+use crate::protocol::{
+    has_batchexecute_session_error, parse_batchexecute_response, ProtocolError, GEMINI_BASE,
+};
+
+use super::GeminiExporter;
+
+impl GeminiExporter {
+    /// 递增并返回下一个 reqid
+    fn next_reqid(&self) -> String {
+        let val = self.reqid.fetch_add(100000, Ordering::Relaxed);
+        (val + 100000).to_string()
+    }
+
+    /// 发送 batchexecute 请求，返回指定 rpcid 的解析数据。
+    ///
+    /// # Arguments
+    /// - `rpcid`: 目标 RPC 标识（如 "MaZiqc"、"hNvQHb"）
+    /// - `payload_json`: JSON 序列化后的 payload 字符串
+    /// - `source_path`: 来源路径（用于 source-path 参数，可为空）
+    pub async fn batchexecute(
+        &self,
+        rpcid: &str,
+        payload_json: &str,
+        source_path: &str,
+    ) -> Result<serde_json::Value, String> {
+        let f_req = serde_json::to_string(&serde_json::json!([[[
+            rpcid,
+            payload_json,
+            serde_json::Value::Null,
+            "generic"
+        ]]]))
+        .map_err(|e| format!("序列化 f.req 失败: {}", e))?;
+
+        let at = self
+            .at
+            .as_deref()
+            .ok_or_else(|| "未初始化认证参数 (at)".to_string())?;
+        let bl = self
+            .bl
+            .as_deref()
+            .ok_or_else(|| "未初始化认证参数 (bl)".to_string())?;
+        let fsid = self.fsid.as_deref().unwrap_or("0");
+
+        // 构建查询参数
+        let reqid_val = self.next_reqid();
+        let mut query_params: Vec<(&str, String)> = vec![
+            ("rpcids", rpcid.to_string()),
+            ("bl", bl.to_string()),
+            ("f.sid", fsid.to_string()),
+            ("hl", "zh-CN".to_string()),
+            ("_reqid", reqid_val),
+            ("rt", "c".to_string()),
+        ];
+
+        // 添加 authuser
+        for (k, v) in self.authuser_params() {
+            query_params.push((k, v));
+        }
+
+        if !source_path.is_empty() {
+            query_params.push(("source-path", source_path.to_string()));
+        }
+
+        // 构建 form body
+        let form_body = [("f.req", f_req.as_str()), ("at", at)];
+
+        let url = format!("{}/_/BardChatUi/data/batchexecute", GEMINI_BASE);
+
+        // 执行前等待
+        self.before_request(&format!("batchexecute:{}", rpcid))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // 发送 POST 请求
+        let resp = self
+            .client
+            .post(&url)
+            .query(&query_params)
+            .form(&form_body)
+            .header(
+                "Content-Type",
+                "application/x-www-form-urlencoded;charset=UTF-8",
+            )
+            .header("x-goog-ext-73010989-jspb", "[0]")
+            .header(
+                "x-goog-ext-525001261-jspb",
+                "[1,null,null,null,null,null,null,null,[4]]",
+            )
+            .send()
+            .await
+            .map_err(|e| {
+                // 网络错误时也需要在调用方标记失败
+                format!("batchexecute 网络请求失败: {}", e)
+            });
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                self.mark_request_failure();
+                return Err(e);
+            }
+        };
+
+        let status = resp.status();
+        let resp_text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取 batchexecute 响应失败: {}", e))?;
+
+        if !status.is_success() {
+            self.mark_request_failure();
+            let preview: String = resp_text.chars().take(500).collect();
+            log::debug!("HTTP {} 响应内容: {}", status.as_u16(), preview);
+            return Err(format!("batchexecute 失败: HTTP {}", status.as_u16()));
+        }
+
+        let results = parse_batchexecute_response(&resp_text);
+        for (rid, data) in &results {
+            if rid == rpcid {
+                self.mark_request_success();
+                return Ok(data.clone());
+            }
+        }
+
+        // 未找到目标 rpcid
+        self.mark_request_failure();
+        if has_batchexecute_session_error(&resp_text, rpcid) {
+            return Err(format!(
+                "{}: rpcid={}",
+                ProtocolError::SessionExpired,
+                rpcid
+            ));
+        }
+
+        Err(format!("响应中未找到 {} 数据", rpcid))
+    }
+}

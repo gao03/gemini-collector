@@ -2,100 +2,37 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPTS_DIR="$PROJECT_DIR/scripts"
-VENDOR_DIR="$SCRIPTS_DIR/_vendor"
 BUNDLE_DIR="$PROJECT_DIR/src-tauri/target/release/bundle"
 RELEASE_DIR="$PROJECT_DIR/release"
 APP_NAME="gemini-collector"
 APP_PATH="$BUNDLE_DIR/macos/$APP_NAME.app"
-RESOURCES_DIR="$APP_PATH/Contents/Resources"
 
 # 确保 Cargo 在 PATH 中
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# Python 可执行文件（与 lib.rs 中的查找顺序一致）
-find_python() {
-    for py in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
-        if [ -x "$py" ]; then echo "$py"; return; fi
-    done
-    echo "python3"
-}
-PYTHON="$(find_python)"
-
 cleanup() {
     echo "[clean] 清理编译中间产物..."
-    rm -rf "$VENDOR_DIR"
     rm -rf "$PROJECT_DIR/dist"
     rm -rf "$BUNDLE_DIR"
     echo "[clean] 完成"
 }
 
 echo "=== Gemini Collector DMG 构建 ==="
-echo "Python: $PYTHON ($($PYTHON --version))"
 echo "项目目录: $PROJECT_DIR"
 echo
 
-# ── 1. Vendor Python 依赖 ────────────────────────────────────────────────────
-# macOS 运行时依赖：
-#   httpx → anyio, certifi, httpcore, h11, idna, sniffio
-#   browser-cookie3 → lz4, pycryptodomex (Cryptodome)
-#   dbus-python / jeepney / shadowcopy 仅 Linux/Windows 需要，跳过
-VENDOR_PACKAGES=(
-    httpx anyio certifi httpcore h11 idna sniffio
-    browser_cookie3 lz4 Crypto Cryptodome
-)
-
-echo "[1/5] 构建 Python vendor 目录..."
-rm -rf "$VENDOR_DIR"
-mkdir -p "$VENDOR_DIR"
-
-SITE_PACKAGES="$("$PYTHON" -c 'import site; print(site.getsitepackages()[0])')"
-
-# 先尝试 pip install；若 SSL 失败则从本机 site-packages 复制
-if "$PYTHON" -m pip install \
-    --target "$VENDOR_DIR" \
-    --quiet \
-    --disable-pip-version-check \
-    httpx \
-    browser-cookie3 2>/dev/null; then
-    echo "      pip install 成功"
-else
-    echo "      pip 不可用，从本机 site-packages 复制..."
-    for pkg in "${VENDOR_PACKAGES[@]}"; do
-        src="$SITE_PACKAGES/$pkg"
-        if [ -d "$src" ]; then
-            cp -r "$src" "$VENDOR_DIR/"
-        else
-            echo "      警告: 未找到 $pkg，跳过"
-        fi
-    done
-fi
-echo "      完成 ($(du -sh "$VENDOR_DIR" | cut -f1))"
-
-# ── 2. 前端构建 ──────────────────────────────────────────────────────────────
-echo "[2/5] 构建前端..."
+# ── 1. 前端构建 ──────────────────────────────────────────────────────────────
+echo "[1/3] 构建前端..."
 npm run build --silent
 echo "      完成"
 
-# ── 3. Tauri 构建 .app ───────────────────────────────────────────────────────
-echo "[3/5] 构建 Tauri .app..."
+# ── 2. Tauri 构建 .app ───────────────────────────────────────────────────────
+echo "[2/3] 构建 Tauri .app..."
 npx tauri build --bundles app 2>&1 | grep -E "^   (Compiling|Finished|Bundling|error)" || true
 echo "      完成: $APP_PATH"
 
-# ── 4. 注入 _vendor 到 .app/Contents/Resources ───────────────────────────────
-echo "[4/5] 注入 _vendor 到 app bundle..."
-cp -r "$VENDOR_DIR" "$RESOURCES_DIR/_vendor"
-
-for pkg in httpx browser_cookie3 anyio; do
-    if [ -d "$RESOURCES_DIR/_vendor/$pkg" ]; then
-        echo "      ✓ $pkg"
-    else
-        echo "      ✗ $pkg 未找到，构建可能有问题"
-    fi
-done
-
-# ── 5. 制作 DMG → release/ ───────────────────────────────────────────────────
-echo "[5/5] 制作 DMG..."
+# ── 3. 制作 DMG → release/ ───────────────────────────────────────────────────
+echo "[3/3] 制作 DMG..."
 mkdir -p "$RELEASE_DIR"
 
 VERSION="$(plutil -p "$APP_PATH/Contents/Info.plist" | grep CFBundleShortVersionString | awk -F'"' '{print $4}')"

@@ -264,6 +264,7 @@ function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountsImportError, setAccountsImportError] = useState<string | null>(null);
+  const [reloadingAccounts, setReloadingAccounts] = useState(false);
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [conversationSummaries, setConversationSummaries] = useState<ConversationSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -337,6 +338,23 @@ function App() {
     const loaded = parseAccountsPayload(await invoke<string>("load_accounts"));
     setAccounts(loaded);
     return loaded;
+  }
+
+  async function handleReloadAccounts() {
+    setReloadingAccounts(true);
+    setAccounts([]);
+    setAccountsLoading(true);
+    setAccountsImportError(null);
+    try {
+      await invoke("reload_accounts_import");
+    } catch (e: unknown) {
+      const msg = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+      setAccountsImportError(msg);
+    } finally {
+      await reloadAccounts();
+      setAccountsLoading(false);
+      setReloadingAccounts(false);
+    }
   }
 
   async function loadSummaries(accountId: string): Promise<void> {
@@ -968,6 +986,8 @@ function App() {
           onSelect={handleSelectAccount}
           isDark={isDark}
           onToggleDark={() => setIsDark((v) => !v)}
+          onReload={handleReloadAccounts}
+          reloading={reloadingAccounts}
         />
       </ThemeContext.Provider>
     );
@@ -1296,7 +1316,7 @@ function App() {
           </div>
         </div>
       )}
-      {(exportingAccountData || preparingExportData) && (
+      {(exportingAccountData || preparingExportData || importingAccountData) && (
         <>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           <div
@@ -1331,7 +1351,7 @@ function App() {
                 }}
               />
               <div style={{ marginTop: 14, fontSize: 14, color: theme.text }}>
-                {preparingExportData ? "正在读取数据…" : "导出中，请勿关闭…"}
+                {importingAccountData ? "导入中，请勿关闭…" : preparingExportData ? "正在读取数据…" : "导出中，请勿关闭…"}
               </div>
             </div>
           </div>

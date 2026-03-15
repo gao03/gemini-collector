@@ -928,10 +928,7 @@ function AttachmentStrip({
                 onClick={() => setLightboxIdx(i)}
                 style={{ width: 160, height: 110, borderRadius: 14, overflow: "hidden", cursor: "pointer", flexShrink: 0, background: "#111", boxShadow: "0 2px 8px rgba(0,0,0,0.3)", position: "relative" }}
               >
-                <VideoThumbnail
-                  videoUrl={url}
-                  previewUrl={att.previewMediaId ? buildUrl(att.previewMediaId, mediaDir, cacheKey) : ""}
-                />
+                <VideoThumbnail videoUrl={url} />
                 <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)" }}>
                   <div style={{ width: 36, height: 36, borderRadius: "50%", border: "1.5px solid rgba(255,255,255,0.85)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="rgba(255,255,255,0.9)">
@@ -1053,29 +1050,93 @@ function ImageThumbnail({
   );
 }
 
-function VideoThumbnail({ videoUrl, previewUrl }: { videoUrl: string; previewUrl: string }) {
-  const [previewFailed, setPreviewFailed] = useState(false);
-  const canUsePreview = !!previewUrl && !previewFailed;
+/** 利用 WebView 原生解码能力，通过 <video> + <canvas> 抽取视频首帧作为预览图。 */
+const videoFrameCache = new Map<string, string>();
 
-  if (canUsePreview) {
+function VideoThumbnail({ videoUrl }: { videoUrl: string }) {
+  const [frameDataUrl, setFrameDataUrl] = useState<string | null>(
+    () => videoFrameCache.get(videoUrl) ?? null,
+  );
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (frameDataUrl || failed || !videoUrl) return;
+    if (videoFrameCache.has(videoUrl)) {
+      setFrameDataUrl(videoFrameCache.get(videoUrl)!);
+      return;
+    }
+
+    let cancelled = false;
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.muted = true;
+    video.preload = "auto";
+    video.playsInline = true;
+
+    const cleanup = () => {
+      video.removeAttribute("src");
+      video.load();
+    };
+
+    video.addEventListener("loadeddata", () => {
+      if (cancelled) return;
+      // 拨到 0.1s 以跳过可能的纯黑首帧
+      video.currentTime = 0.1;
+    }, { once: true });
+
+    video.addEventListener("seeked", () => {
+      if (cancelled) return;
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(video, 0, 0);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+          videoFrameCache.set(videoUrl, dataUrl);
+          setFrameDataUrl(dataUrl);
+        }
+      } catch {
+        setFailed(true);
+      }
+      cleanup();
+    }, { once: true });
+
+    video.addEventListener("error", () => {
+      if (!cancelled) setFailed(true);
+      cleanup();
+    }, { once: true });
+
+    video.src = videoUrl;
+
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+  }, [videoUrl, frameDataUrl, failed]);
+
+  if (frameDataUrl) {
     return (
       <img
-        src={previewUrl}
+        src={frameDataUrl}
         alt="video preview"
-        onError={() => setPreviewFailed(true)}
         style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
         draggable={false}
       />
     );
   }
 
+  // fallback: 灰底占位
   return (
-    <video
-      src={videoUrl}
-      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-      muted
-      preload="metadata"
-    />
+    <div style={{ width: "100%", height: "100%", background: "#222", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {!failed && (
+        <>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          <div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.2)", borderTop: "2px solid rgba(255,255,255,0.6)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+        </>
+      )}
+    </div>
   );
 }
 
