@@ -3,6 +3,8 @@ mod discover;
 pub mod domain;
 pub mod keychain_diag;
 pub mod list_accounts;
+#[cfg(target_os = "windows")]
+mod webview_cookies;
 
 pub use chrome_decrypt::decrypt_chrome_cookie_value;
 pub use discover::{discover_chrome_cookie_files, CookieFileEntry};
@@ -12,6 +14,8 @@ pub use keychain_diag::{
     run_full_diagnostics, CookieDiagnosticReport, KeychainDiagResult,
 };
 pub use list_accounts::{discover_email_authuser_mapping, AccountMapping};
+#[cfg(target_os = "windows")]
+pub use webview_cookies::read_webview_session_cookies;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -93,7 +97,7 @@ pub fn read_chrome_cookies(
 }
 
 /// Copy a file to a temp location (avoids SQLite WAL locking issues).
-fn tempfile_copy(src: &Path) -> Result<std::path::PathBuf> {
+pub(crate) fn tempfile_copy(src: &Path) -> Result<std::path::PathBuf> {
     let mut tmp = std::env::temp_dir();
     let stem = src
         .file_name()

@@ -2,6 +2,8 @@ import React from "react";
 import { Account } from "../data/types";
 import { useTheme } from "../theme";
 
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
+
 interface AccountPickerProps {
   accounts: Account[];
   loading: boolean;
@@ -75,10 +77,36 @@ export function AccountPicker({ accounts, loading, importError, onSelect, isDark
           /* No accounts */
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "28px 24px" }}>
             <div style={{ fontSize: 13, color: t.textSub, textAlign: "center", lineHeight: 1.6 }}>
-              未找到本地账号数据。<br />
-              应用已自动尝试从本地浏览器 Cookies 导入账号。<br />
-              请确认已在 Chrome 登录 Gemini 后重新打开应用。
+              {IS_WINDOWS ? (<>
+                未找到本地账号数据。<br />
+                请点击下方按钮登录 Google 账号。
+              </>) : (<>
+                未找到本地账号数据。<br />
+                应用已自动尝试从本地浏览器 Cookies 导入账号。<br />
+                请确认已在 Chrome 登录 Gemini 后重新打开应用。
+              </>)}
             </div>
+            {IS_WINDOWS && onReload && (
+              <button
+                onClick={onReload}
+                disabled={reloading || loading}
+                style={{
+                  marginTop: 18,
+                  padding: "9px 28px",
+                  borderRadius: 10,
+                  border: "none",
+                  background: "linear-gradient(135deg, #4285f4 0%, #34a853 100%)",
+                  color: "#fff",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: reloading || loading ? "default" : "pointer",
+                  opacity: reloading || loading ? 0.6 : 1,
+                  transition: "opacity 0.15s",
+                }}
+              >
+                {reloading ? "正在等待登录..." : "登录 Google 账号"}
+              </button>
+            )}
             {importError && (
               <div style={{
                 marginTop: 16,

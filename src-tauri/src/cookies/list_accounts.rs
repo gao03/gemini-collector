@@ -173,6 +173,8 @@ pub async fn discover_email_authuser_mapping(
         .await
         .map_err(|e| format!("读取 ListAccounts 响应失败: {}", e))?;
 
+    log::info!("ListAccounts HTTP {}, body length={}, preview: {}", status.as_u16(), body.len(), body.chars().take(300).collect::<String>());
+
     parse_list_accounts_response(&body)
 }
 
@@ -184,28 +186,29 @@ fn parse_list_accounts_response(body: &str) -> Result<Vec<AccountMapping>, Strin
             let payload_raw = m.as_str();
             let payload_unescaped = payload_raw.replace("\\/", "/");
             let payload = decode_unicode_escapes(&payload_unescaped);
+            log::info!("ListAccounts postMessage payload (decoded): {}", payload.chars().take(500).collect::<String>());
             return parse_list_accounts_json(&payload);
         }
     }
 
     // Fallback: try to find raw JSON array directly (newer response format)
-    // Google sometimes returns the response with )]}' prefix like batchexecute
     let trimmed = body.trim();
     for prefix in &[")]}'", ")]}'\n"] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             let rest = rest.trim();
             if rest.starts_with('[') {
+                log::info!("ListAccounts JSON (stripped prefix): {}", rest.chars().take(500).collect::<String>());
                 return parse_list_accounts_json(rest);
             }
         }
     }
-    // Try if body itself is JSON
     if trimmed.starts_with('[') {
+        log::info!("ListAccounts raw JSON: {}", trimmed.chars().take(500).collect::<String>());
         return parse_list_accounts_json(trimmed);
     }
 
-    // Log first 500 chars for debugging
     let preview: String = body.chars().take(500).collect();
+    log::warn!("ListAccounts 响应无法匹配任何格式，preview: {}", preview);
     Err(format!(
         "ListAccounts 响应格式无法解析（前500字符: {}）",
         preview
