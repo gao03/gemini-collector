@@ -1140,7 +1140,8 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .max_file_size(5_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
-                .level(log::LevelFilter::Debug)
+                .level(log::LevelFilter::Warn)
+                .level_for("gemini_collector_lib", log::LevelFilter::Debug)
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
