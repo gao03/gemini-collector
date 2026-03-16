@@ -11,7 +11,9 @@ pub mod turn_parser;
 mod worker_host;
 
 use std::path::Path;
-use tauri::{Emitter, Manager};
+#[cfg(target_os = "windows")]
+use tauri::Emitter;
+use tauri::Manager;
 use worker_host::EnqueueJobRequest;
 
 use export::{resolve_account_id_arg, value_to_non_empty_string};

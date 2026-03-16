@@ -141,6 +141,7 @@ impl WorkerHost {
     }
 
     /// 外部注入 cookies（Windows WebView2 登录后使用）
+    #[cfg(target_os = "windows")]
     pub async fn set_cookies(&self, cookies: HashMap<String, String>) {
         let mut cache = self.cookies_cache.lock().await;
         *cache = Some(cookies);
@@ -762,6 +763,7 @@ pub async fn cancel_job_async(account_id: &str) -> Result<(), String> {
 }
 
 /// 注入 cookies 到 WorkerHost 缓存（Windows WebView2 登录后调用）
+#[cfg(target_os = "windows")]
 pub async fn set_worker_cookies(cookies: HashMap<String, String>) -> Result<(), String> {
     let host = get_host()?;
     host.set_cookies(cookies).await;
