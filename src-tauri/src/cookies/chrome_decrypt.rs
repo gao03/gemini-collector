@@ -219,11 +219,6 @@ fn dpapi_decrypt_bytes(data: &[u8]) -> Result<Vec<u8>> {
     use std::ptr;
     use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
 
-    // LocalFree was removed from windows-targets 0.52+; declare it directly.
-    extern "system" {
-        fn LocalFree(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-    }
-
     let mut input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
@@ -249,12 +244,26 @@ fn dpapi_decrypt_bytes(data: &[u8]) -> Result<Vec<u8>> {
         bail!("DPAPI CryptUnprotectData failed");
     }
 
+    if output.pbData.is_null() {
+        bail!("DPAPI CryptUnprotectData returned null pointer");
+    }
+
+    // RAII guard: ensure LocalFree is called even if .to_vec() panics
+    struct DpapiGuard(*mut u8);
+    impl Drop for DpapiGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                extern "system" {
+                    fn LocalFree(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+                }
+                unsafe { LocalFree(self.0 as _); }
+            }
+        }
+    }
+    let _guard = DpapiGuard(output.pbData);
+
     let result =
         unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-
-    unsafe {
-        LocalFree(output.pbData as _);
-    }
 
     Ok(result)
 }

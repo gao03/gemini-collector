@@ -490,6 +490,22 @@ pub fn search_messages(
     Ok(results)
 }
 
+/// HTML entity 转义，防止 XSS。
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// 在 text 中定位 query 子串，截取前后上下文并用 <mark> 高亮。
 fn build_snippet(text: &str, query_lower: &str) -> String {
     const CONTEXT_CHARS: usize = 40;
@@ -542,11 +558,11 @@ fn build_snippet(text: &str, query_lower: &str) -> String {
     if start > 0 {
         snippet.push_str("...");
     }
-    snippet.push_str(&text[start..pos]);
+    snippet.push_str(&html_escape(&text[start..pos]));
     snippet.push_str("<mark>");
-    snippet.push_str(&text[pos..match_end]);
+    snippet.push_str(&html_escape(&text[pos..match_end]));
     snippet.push_str("</mark>");
-    snippet.push_str(&text[match_end..end]);
+    snippet.push_str(&html_escape(&text[match_end..end]));
     if end < text.len() {
         snippet.push_str("...");
     }
