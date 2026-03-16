@@ -6,7 +6,7 @@
 
 **把你的 Gemini 对话与所有 AI 生成内容完整保存到本地**
 
-macOS 原生应用 · 支持多账号 · 亮色 / 暗色主题
+macOS & Windows 原生应用 · 支持多账号 · 亮色 / 暗色主题
 
 </div>
 
@@ -35,7 +35,8 @@ macOS 原生应用 · 支持多账号 · 亮色 / 暗色主题
 ## 功能特色
 
 **零操作，立刻同步**
-- 打开 App 即可看到本机 Chrome 已登录的所有 Gemini 账号，傻瓜操作，一键同步，无需任何插件配置
+- **macOS**：打开 App 即可看到本机 Chrome 已登录的所有 Gemini 账号，一键同步，无需任何配置
+- **Windows**：首次打开时通过内置浏览器登录 Google 账号，登录后自动识别并同步
 - 多账号同时在线，独立管理，增量更新，断点续传
 
 **全量内容归档**
@@ -63,7 +64,8 @@ macOS 原生应用 · 支持多账号 · 亮色 / 暗色主题
 
 **所有操作均在本地完成，不上传任何数据。**
 
-- 仅读取本机 Chrome 的 Cookie 完成 Gemini 授权
+- **macOS**：读取本机 Chrome Cookie 完成 Gemini 授权，无需手动登录
+- **Windows**：通过内置 WebView2 浏览器完成 Google 登录，Cookie 仅存储在本地
 - 所有同步内容保存在本地，不经过任何第三方服务器
 - 无需注册账号，无需额外授权
 
@@ -74,7 +76,7 @@ macOS 原生应用 · 支持多账号 · 亮色 / 暗色主题
 | 平台 | 状态 | 说明 |
 |:---|:---:|:---|
 | macOS | ✅ 已支持 | 从 [Releases](https://github.com/FirenzeLor/gemini-collector/releases) 下载最新 `.dmg`，拖入 Applications 即可 |
-| Windows | 🚧 待支持 | 计划中 |
+| Windows | ✅ 已支持 | 从 [Releases](https://github.com/FirenzeLor/gemini-collector/releases) 下载最新安装包，运行安装即可 |
 
 > **macOS 首次打开提示"无法验证开发者"**：前往 **系统设置 → 隐私与安全性** 点击"仍要打开"即可。
 >
@@ -87,5 +89,10 @@ macOS 原生应用 · 支持多账号 · 亮色 / 暗色主题
 
 ## 使用前提
 
+**macOS**
 - macOS 12 及以上
-- **已安装 Google Chrome**，并在 Chrome 中登录了 Gemini（[gemini.google.com](https://gemini.google.com)）
+- 已安装 Google Chrome，并在 Chrome 中登录了 Gemini（[gemini.google.com](https://gemini.google.com)）
+
+**Windows**
+- Windows 10 (1803+) 及以上
+- 首次使用时需在 App 内登录 Google 账号（无需安装 Chrome）
