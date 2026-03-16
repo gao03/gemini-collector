@@ -856,6 +856,10 @@ function AttachmentStrip({
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const failedAttachments = attachments.filter((a) => a.downloadFailed);
   const renderableAttachments = attachments.filter((a) => !a.downloadFailed);
+  const fileAttachments = useMemo(
+    () => renderableAttachments.filter((a) => getKind(a.mimeType) === "file"),
+    [renderableAttachments],
+  );
   const mediaAttachmentsBase = useMemo(
     () => dedupeLikelyFormatVariants(renderableAttachments.filter((a) => getKind(a.mimeType) !== "file")),
     [renderableAttachments],
@@ -942,6 +946,38 @@ function AttachmentStrip({
         </div>
       )}
 
+
+      {/* File attachments */}
+      {fileAttachments.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: alignRight ? "flex-end" : "flex-start", marginBottom: 6 }}>
+          {fileAttachments.map((att, i) => {
+            const ext = att.mediaId.split(".").pop()?.toUpperCase() || "FILE";
+            const displayName = att.mimeType.split("/").pop() || ext;
+            return (
+              <div
+                key={`file-${i}`}
+                style={{
+                  width: 160, height: 110, borderRadius: 14, overflow: "hidden", flexShrink: 0,
+                  background: "#1a1a2e", boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                  gap: 6, padding: "8px 10px",
+                }}
+              >
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", textAlign: "center", lineHeight: 1.3, wordBreak: "break-all", maxHeight: 28, overflow: "hidden" }}>
+                  {displayName}
+                </div>
+                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", textTransform: "uppercase" }}>
+                  {ext}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Lightbox */}
       {lightboxIdx !== null && (
