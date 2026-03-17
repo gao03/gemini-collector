@@ -170,7 +170,6 @@ fn should_store(path: &Path) -> bool {
 }
 
 fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
-    use std::io::{Read, Write};
     use zip::write::SimpleFileOptions;
 
     let folder_name = account_dir
@@ -209,11 +208,7 @@ fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
                 .map_err(|e| format!("添加文件失败: {}", e))?;
             let mut f = std::fs::File::open(entry_path)
                 .map_err(|e| format!("打开文件失败: {}", e))?;
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf)
-                .map_err(|e| format!("读取文件失败: {}", e))?;
-            zip_writer
-                .write_all(&buf)
+            std::io::copy(&mut f, &mut zip_writer)
                 .map_err(|e| format!("写入 zip 失败: {}", e))?;
         }
     }
@@ -699,10 +694,10 @@ fn write_kelivo_zip(zip_path: &Path, bin_items: &[KelivoItem], media_dir: &Path)
     for mid in &all_mids {
         let src = media_dir.join(mid);
         if src.exists() {
-            let data = std::fs::read(&src).str_err()?;
             let opts = if should_store(&src) { opts_stored } else { opts_deflate };
             zw.start_file(format!("upload/{}", mid), opts).str_err()?;
-            zw.write_all(&data).str_err()?;
+            let mut f = std::fs::File::open(&src).str_err()?;
+            std::io::copy(&mut f, &mut zw).str_err()?;
             media_found += 1;
         } else {
             media_missing += 1;
