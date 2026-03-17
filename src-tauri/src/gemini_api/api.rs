@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use crate::cookies::list_accounts;
+use crate::str_err::ToStringErr;
 use crate::protocol::{
     diagnose_auth_page, email_to_account_id, extract_chat_latest_update, to_iso_utc,
     BATCH_SIZE, DETAIL_PAGE_SIZE, GEMINI_BASE,
@@ -110,7 +111,7 @@ impl GeminiExporter {
         }
 
         let final_url = resp.url().to_string();
-        let html = resp.text().await.map_err(|e| e.to_string())?;
+        let html = resp.text().await.str_err()?;
 
         // 提取 SNlM0e (at token)
         match at_re().captures(&html) {
@@ -331,7 +332,7 @@ impl GeminiExporter {
         conv_id: &str,
         cursor: Option<&str>,
     ) -> Result<(Vec<serde_json::Value>, Option<String>), String> {
-        let source_path = format!("/app/{}", conv_id.replace("c_", ""));
+        let source_path = format!("/app/{}", crate::protocol::strip_c_prefix(conv_id));
         let payload = json!([
             conv_id,
             DETAIL_PAGE_SIZE,
@@ -403,7 +404,7 @@ impl GeminiExporter {
         existing_turn_ids: &HashSet<String>,
     ) -> Result<Vec<serde_json::Value>, String> {
         let mut all_new_turns = Vec::new();
-        let source_path = format!("/app/{}", conv_id.replace("c_", ""));
+        let source_path = format!("/app/{}", crate::protocol::strip_c_prefix(conv_id));
 
         let payload = json!([conv_id, DETAIL_PAGE_SIZE, null, 1, [1], [4], null, 1]).to_string();
         let result = self.batchexecute("hNvQHb", &payload, &source_path).await?;

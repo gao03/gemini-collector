@@ -124,8 +124,8 @@ pub fn mask_email(email: &str) -> String {
     }
 }
 
-/// 将对话 ID 规范化为 c_xxx 形式
-pub fn normalize_chat_id(chat_id: &str) -> String {
+/// 确保对话 ID 带 c_ 前缀（用于 API 调用）
+pub fn ensure_c_prefix(chat_id: &str) -> String {
     let cid = chat_id.trim();
     if cid.is_empty() {
         return cid.to_string();
@@ -136,6 +136,17 @@ pub fn normalize_chat_id(chat_id: &str) -> String {
         format!("c_{}", cid)
     }
 }
+
+/// 去除对话 ID 的 c_ 前缀（用于本地存储/显示）
+pub fn strip_c_prefix(chat_id: &str) -> String {
+    let cid = chat_id.trim();
+    if let Some(stripped) = cid.strip_prefix("c_") {
+        stripped.to_string()
+    } else {
+        cid.to_string()
+    }
+}
+
 
 /// 诊断认证页面
 pub fn diagnose_auth_page(html: &str, final_url: &str) -> String {
@@ -330,10 +341,17 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_chat_id() {
-        assert_eq!(normalize_chat_id("abc123"), "c_abc123");
-        assert_eq!(normalize_chat_id("c_abc123"), "c_abc123");
-        assert_eq!(normalize_chat_id("  c_abc  "), "c_abc");
+    fn test_ensure_c_prefix() {
+        assert_eq!(ensure_c_prefix("abc123"), "c_abc123");
+        assert_eq!(ensure_c_prefix("c_abc123"), "c_abc123");
+        assert_eq!(ensure_c_prefix("  c_abc  "), "c_abc");
+    }
+
+    #[test]
+    fn test_strip_c_prefix() {
+        assert_eq!(strip_c_prefix("c_abc123"), "abc123");
+        assert_eq!(strip_c_prefix("abc123"), "abc123");
+        assert_eq!(strip_c_prefix("  c_abc  "), "abc");
     }
 
     #[test]

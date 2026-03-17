@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 use crate::cookies;
+use crate::str_err::ToStringErr;
 use crate::sync::CancellationToken;
 use crate::gemini_api::GeminiExporter;
 
@@ -89,7 +90,7 @@ pub struct WorkerHost {
     /// 按账号追踪活跃任务的取消令牌
     active_cancels: Mutex<HashMap<String, CancellationToken>>,
     /// Cookie 缓存（多账号共享同一组浏览器 cookies）
-    cookies_cache: Mutex<Option<HashMap<String, String>>>,
+    cookies_cache: Mutex<Option<Arc<HashMap<String, String>>>>,
     /// 递增 job ID
     next_job_id: AtomicU64,
     /// 是否正在关闭
@@ -112,10 +113,10 @@ impl WorkerHost {
     /// 读取 cookies（带缓存）。
     /// Windows 上由 open_google_login 登录成功后通过 set_cookies 注入；
     /// macOS/Linux 上从本机浏览器读取。
-    async fn get_cookies(&self) -> Result<HashMap<String, String>, String> {
+    async fn get_cookies(&self) -> Result<Arc<HashMap<String, String>>, String> {
         let mut cache = self.cookies_cache.lock().await;
         if let Some(ref c) = *cache {
-            return Ok(c.clone());
+            return Ok(Arc::clone(c));
         }
 
         #[cfg(target_os = "windows")]
@@ -135,8 +136,9 @@ impl WorkerHost {
             if cookies.is_empty() {
                 return Err("本机浏览器 cookies 读取结果为空".to_string());
             }
-            *cache = Some(cookies.clone());
-            Ok(cookies)
+            let arc_cookies = Arc::new(cookies);
+            *cache = Some(Arc::clone(&arc_cookies));
+            Ok(arc_cookies)
         }
     }
 
@@ -144,7 +146,7 @@ impl WorkerHost {
     #[cfg(target_os = "windows")]
     pub async fn set_cookies(&self, cookies: HashMap<String, String>) {
         let mut cache = self.cookies_cache.lock().await;
-        *cache = Some(cookies);
+        *cache = Some(Arc::new(cookies));
         // 清空已有 session，下次任务会用新 cookies 重建
         self.sessions.lock().await.clear();
     }
@@ -155,8 +157,8 @@ impl WorkerHost {
         if !accounts_file.exists() {
             return Err("accounts.json 不存在，请先导入账号".to_string());
         }
-        let content = std::fs::read_to_string(&accounts_file).map_err(|e| e.to_string())?;
-        let data: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        let content = std::fs::read_to_string(&accounts_file).str_err()?;
+        let data: Value = serde_json::from_str(&content).str_err()?;
         let rows = data
             .get("accounts")
             .and_then(|v| v.as_array())
@@ -209,7 +211,7 @@ impl WorkerHost {
         let (authuser, email) = self.read_account_mapping(account_id)?;
 
         let mut exporter = GeminiExporter::new(
-            cookies,
+            HashMap::clone(&cookies),
             authuser,
             Some(account_id.to_string()),
             email,

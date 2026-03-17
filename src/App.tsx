@@ -11,8 +11,9 @@ import { Account, Conversation, ConversationSummary } from "./data/types";
 import { ThemeContext, lightTheme, darkTheme } from "./theme";
 
 type Screen = "account-picker" | "chat";
+import { IS_WINDOWS } from "./utils/platform";
+
 type ConversationSortMode = "updated_desc" | "size_desc" | "media_desc" | "created_desc";
-const IS_WINDOWS = navigator.userAgent.includes("Windows");
 // Windows 有原生标题栏占空间，zoom 1.05 会导致底部溢出；同时 52px 拖拽区域是 macOS overlay 专用
 if (IS_WINDOWS) {
   document.body.style.zoom = "1";

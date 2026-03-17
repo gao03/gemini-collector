@@ -9,6 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::str_err::ToStringErr;
+
 use reqwest::header;
 use url::Url;
 
@@ -113,7 +115,7 @@ impl GeminiExporter {
 
             self.before_request("media_http_get")
                 .await
-                .map_err(|e| e.to_string())?;
+                .str_err()?;
 
             let resp = no_redirect_client
                 .get(&current_url)
@@ -169,7 +171,7 @@ impl GeminiExporter {
 
             if status.is_success() {
                 self.mark_request_success();
-                let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+                let bytes = resp.bytes().await.str_err()?;
                 return Ok(Some(bytes.to_vec()));
             }
 

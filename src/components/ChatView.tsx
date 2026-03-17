@@ -719,17 +719,7 @@ export function ChatView({ conversation, mediaDir, mediaVersion = 0, scrollToMes
 
   const visibleMessages = useMemo(() => {
     if (!conversation) return [];
-    const toRemove = new Set<number>();
-    conversation.messages.forEach((msg, i) => {
-      if (msg.text.includes("action_card_content") || msg.text.trim() === "没问题，我可以帮忙。在这些媒体服务提供方中，你想使用哪个？") {
-        toRemove.add(i);
-        for (let j = i - 1; j >= 0; j--) {
-          if (conversation.messages[j].role === "user") { toRemove.add(j); break; }
-          if (conversation.messages[j].role === "model") break;
-        }
-      }
-    });
-    return conversation.messages.filter((_, i) => !toRemove.has(i));
+    return conversation.messages.filter((msg) => !msg.hidden);
   }, [conversation]);
 
   // 搜索跳转：对话加载后滚动到目标消息

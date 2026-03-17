@@ -6,6 +6,7 @@ use tauri::Manager;
 
 use crate::search;
 use crate::storage;
+use crate::str_err::ToStringErr;
 
 // ============================================================================
 // 导入内部逻辑
@@ -32,7 +33,7 @@ fn merge_conversations_index(src_dir: &Path, target_dir: &Path) -> Result<(), St
     let target_conv_file = target_dir.join("conversations.json");
 
     let mut existing_items: Vec<serde_json::Value> = if target_conv_file.exists() {
-        let raw = std::fs::read_to_string(&target_conv_file).map_err(|e| e.to_string())?;
+        let raw = std::fs::read_to_string(&target_conv_file).str_err()?;
         serde_json::from_str::<serde_json::Value>(&raw)
             .ok()
             .and_then(|v| v.get("items").and_then(|a| a.as_array()).cloned())
@@ -43,7 +44,7 @@ fn merge_conversations_index(src_dir: &Path, target_dir: &Path) -> Result<(), St
 
     let src_conv_file = src_dir.join("conversations.json");
     if src_conv_file.exists() {
-        let raw = std::fs::read_to_string(&src_conv_file).map_err(|e| e.to_string())?;
+        let raw = std::fs::read_to_string(&src_conv_file).str_err()?;
         if let Some(src_items) = serde_json::from_str::<serde_json::Value>(&raw)
             .ok()
             .and_then(|v| v.get("items").and_then(|a| a.as_array()).cloned())
@@ -68,8 +69,8 @@ fn merge_conversations_index(src_dir: &Path, target_dir: &Path) -> Result<(), St
     }
 
     let out = serde_json::json!({ "items": existing_items });
-    std::fs::write(&target_conv_file, serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    std::fs::write(&target_conv_file, serde_json::to_string_pretty(&out).str_err()?)
+        .str_err()
 }
 
 fn merge_jsonl(existing_path: &Path, src_path: &Path) -> Result<(), String> {
@@ -89,8 +90,8 @@ fn merge_jsonl(existing_path: &Path, src_path: &Path) -> Result<(), String> {
         (meta, msgs)
     };
 
-    let existing_raw = std::fs::read_to_string(existing_path).map_err(|e| e.to_string())?;
-    let src_raw = std::fs::read_to_string(src_path).map_err(|e| e.to_string())?;
+    let existing_raw = std::fs::read_to_string(existing_path).str_err()?;
+    let src_raw = std::fs::read_to_string(src_path).str_err()?;
     let (existing_meta, existing_msgs) = parse(&existing_raw);
     let (src_meta, src_msgs) = parse(&src_raw);
 
@@ -125,13 +126,13 @@ fn merge_jsonl(existing_path: &Path, src_path: &Path) -> Result<(), String> {
         ta.cmp(tb)
     });
 
-    let mut out = serde_json::to_string(&winner_meta).map_err(|e| e.to_string())?;
+    let mut out = serde_json::to_string(&winner_meta).str_err()?;
     out.push('\n');
     for msg in &merged {
-        out.push_str(&serde_json::to_string(msg).map_err(|e| e.to_string())?);
+        out.push_str(&serde_json::to_string(msg).str_err()?);
         out.push('\n');
     }
-    std::fs::write(existing_path, out).map_err(|e| e.to_string())
+    std::fs::write(existing_path, out).str_err()
 }
 
 fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
@@ -140,8 +141,8 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
     let target_conv_dir = target_dir.join("conversations");
     let target_media_dir = target_dir.join("media");
 
-    std::fs::create_dir_all(&target_conv_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&target_media_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&target_conv_dir).str_err()?;
+    std::fs::create_dir_all(&target_media_dir).str_err()?;
 
     let mut imported_convs: usize = 0;
     let mut merged_convs: usize = 0;
@@ -149,31 +150,31 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
     let mut skipped_media: usize = 0;
 
     if src_conv_dir.exists() {
-        for entry in std::fs::read_dir(&src_conv_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
+        for entry in std::fs::read_dir(&src_conv_dir).str_err()? {
+            let entry = entry.str_err()?;
             let path = entry.path();
-            if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+            if !entry.file_type().str_err()?.is_file() { continue; }
             if path.extension().and_then(|s| s.to_str()) != Some("jsonl") { continue; }
             let target_path = target_conv_dir.join(path.file_name().unwrap());
             if target_path.exists() {
                 merge_jsonl(&target_path, &path)?;
                 merged_convs += 1;
             } else {
-                std::fs::copy(&path, &target_path).map_err(|e| e.to_string())?;
+                std::fs::copy(&path, &target_path).str_err()?;
                 imported_convs += 1;
             }
         }
     }
 
     if src_media_dir.exists() {
-        for entry in std::fs::read_dir(&src_media_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+        for entry in std::fs::read_dir(&src_media_dir).str_err()? {
+            let entry = entry.str_err()?;
+            if !entry.file_type().str_err()?.is_file() { continue; }
             let target_path = target_media_dir.join(entry.file_name());
             if target_path.exists() {
                 skipped_media += 1;
             } else {
-                std::fs::copy(&entry.path(), &target_path).map_err(|e| e.to_string())?;
+                std::fs::copy(&entry.path(), &target_path).str_err()?;
                 imported_media += 1;
             }
         }
@@ -187,7 +188,7 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
         "importedMedia": imported_media,
         "skippedMedia": skipped_media,
     }))
-    .map_err(|e| e.to_string())
+    .str_err()
 }
 
 fn import_account_zip_impl(data_dir: &Path, account_id: &str, zip_path: &Path) -> Result<String, String> {
@@ -205,20 +206,20 @@ fn import_account_zip_impl(data_dir: &Path, account_id: &str, zip_path: &Path) -
 
     let extract_result: Result<(), String> = (|| {
         for i in 0..archive.len() {
-            let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+            let mut entry = archive.by_index(i).str_err()?;
             let out_path = match entry.enclosed_name() {
                 Some(p) => tmp_dir.join(p),
                 None => continue,
             };
             if entry.is_dir() {
-                std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(&out_path).str_err()?;
             } else {
                 if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    std::fs::create_dir_all(parent).str_err()?;
                 }
                 let mut data = Vec::new();
-                entry.read_to_end(&mut data).map_err(|e| e.to_string())?;
-                std::fs::write(&out_path, &data).map_err(|e| e.to_string())?;
+                entry.read_to_end(&mut data).str_err()?;
+                std::fs::write(&out_path, &data).str_err()?;
             }
         }
         Ok(())
@@ -274,7 +275,7 @@ pub async fn import_account_zip(
     account_id: String,
     zip_path: String,
 ) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let zip = PathBuf::from(&zip_path);
 
     let account_id_clone = account_id.clone();
@@ -282,9 +283,9 @@ pub async fn import_account_zip(
         import_account_zip_impl(&data_dir, &account_id_clone, &zip)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .str_err()??;
 
-    let account_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("accounts").join(&account_id);
+    let account_dir = app.path().app_data_dir().str_err()?.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
     if let Ok(index) = search::open_or_create_index(&account_dir) {
         let _ = search::index_all(&index, &account_dir, &conversations_dir);
