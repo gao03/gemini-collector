@@ -1,6 +1,7 @@
 //! Gemini 数据持久化：JSONL 读写、账号元数据、sync state、媒体清单、对话索引。
 
 use crate::protocol::{coerce_epoch_seconds, iso_to_epoch_seconds, to_iso_utc};
+use crate::str_err::ToStringErr;
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -59,47 +60,39 @@ fn turn_id_from_raw(raw_turn: &Value) -> Option<String> {
     }
 }
 
-pub fn dedupe_raw_turns_by_id(raw_turns: &[Value]) -> (Vec<Value>, usize) {
-    let mut deduped = Vec::new();
-    let mut seen = HashSet::new();
+/// Generic dedup: items without an ID (extractor returns None or empty) are always kept.
+fn dedupe_by_id<F>(items: &[Value], id_extractor: F) -> (Vec<Value>, usize)
+where
+    F: Fn(&Value) -> Option<String>,
+{
+    let mut deduped = Vec::with_capacity(items.len());
+    let mut seen = HashSet::with_capacity(items.len());
     let mut removed = 0;
-    for turn in raw_turns {
-        if let Some(tid) = turn_id_from_raw(turn) {
-            if !tid.is_empty() {
-                if seen.contains(&tid) {
+    for item in items {
+        if let Some(id) = id_extractor(item) {
+            if !id.is_empty() {
+                if seen.contains(&id) {
                     removed += 1;
                     continue;
                 }
-                seen.insert(tid);
+                seen.insert(id);
             }
         }
-        deduped.push(turn.clone());
+        deduped.push(item.clone());
     }
     (deduped, removed)
+}
+
+pub fn dedupe_raw_turns_by_id(raw_turns: &[Value]) -> (Vec<Value>, usize) {
+    dedupe_by_id(raw_turns, |v| turn_id_from_raw(v))
+}
+
+pub fn dedupe_message_rows_by_id(rows: &[Value]) -> (Vec<Value>, usize) {
+    dedupe_by_id(rows, |v| get_row_id(v).map(|s| s.to_string()))
 }
 
 fn get_row_id(row: &Value) -> Option<&str> {
     row.as_object()?.get("id")?.as_str()
-}
-
-pub fn dedupe_message_rows_by_id(rows: &[Value]) -> (Vec<Value>, usize) {
-    let mut deduped = Vec::new();
-    let mut seen = HashSet::new();
-    let mut removed = 0;
-    for row in rows {
-        match get_row_id(row) {
-            Some(id) if !id.is_empty() => {
-                if seen.contains(id) {
-                    removed += 1;
-                    continue;
-                }
-                seen.insert(id.to_string());
-            }
-            _ => {}
-        }
-        deduped.push(row.clone());
-    }
-    (deduped, removed)
 }
 
 fn message_row_sort_num(row: &Value) -> f64 {
@@ -560,7 +553,7 @@ pub fn turns_to_jsonl_rows(
     chat_info: &Value,
 ) -> Vec<Value> {
     let now_iso = Utc::now().to_rfc3339();
-    let bare_id = conv_id.replace("c_", "");
+    let bare_id = crate::protocol::strip_c_prefix(conv_id);
     let ordered_turns = sort_parsed_turns_by_timestamp(parsed_turns);
 
     let ts_list: Vec<i64> = ordered_turns
@@ -674,7 +667,58 @@ pub fn turns_to_jsonl_rows(
         rows.push(model_row);
     }
 
+    // 标记 action_card 消息为 hidden（仅处理 message 行，跳过第一行 meta）
+    mark_action_card_hidden(&mut rows);
+
     rows
+}
+
+/// 检测 action_card 消息并标记 hidden: true，同时标记其前面关联的 user 消息。
+fn mark_action_card_hidden(rows: &mut [Value]) {
+    // 收集 message 行的索引
+    let msg_indices: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.get("type").and_then(|v| v.as_str()) == Some("message"))
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut to_hide: HashSet<usize> = HashSet::new();
+    for (pos, &row_idx) in msg_indices.iter().enumerate() {
+        let text = rows[row_idx]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if is_action_card_text(text) {
+            to_hide.insert(row_idx);
+            // 向前找关联的 user 消息
+            for prev_pos in (0..pos).rev() {
+                let prev_idx = msg_indices[prev_pos];
+                let role = rows[prev_idx]
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if role == "user" {
+                    to_hide.insert(prev_idx);
+                    break;
+                }
+                if role == "model" {
+                    break;
+                }
+            }
+        }
+    }
+
+    for idx in to_hide {
+        if let Some(obj) = rows[idx].as_object_mut() {
+            obj.insert("hidden".into(), serde_json::json!(true));
+        }
+    }
+}
+
+fn is_action_card_text(text: &str) -> bool {
+    text.contains("action_card_content")
+        || text.trim() == "没问题，我可以帮忙。在这些媒体服务提供方中，你想使用哪个？"
 }
 
 fn build_attachments(files: Option<&Value>) -> Vec<Value> {
@@ -919,11 +963,9 @@ pub fn build_summary_from_chat_listing(chat: &Value, existing: Option<&Value>) -
     let empty = json!({});
     let e = existing.unwrap_or(&empty);
     let status = status_for_remote_summary(existing);
-    let bare_id = chat
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .replace("c_", "");
+    let bare_id = crate::protocol::strip_c_prefix(
+        chat.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+    );
     let title = chat
         .get("title")
         .and_then(|v| v.as_str())
@@ -957,12 +999,6 @@ pub fn build_summary_from_chat_listing(chat: &Value, existing: Option<&Value>) -
         "remoteHash": remote_hash,
         "status": status,
     })
-}
-
-const PLAIN_ACTION_CARD_TEXT: &str = "没问题，我可以帮忙。在这些媒体服务提供方中，你想使用哪个？";
-
-fn is_action_card_text(text: &str) -> bool {
-    text.contains("action_card_content") || text.trim() == PLAIN_ACTION_CARD_TEXT
 }
 
 pub fn filter_display_rows(msg_rows: &[Value]) -> Vec<Value> {
@@ -1008,10 +1044,10 @@ pub fn count_jsonl_files(conversations_dir: &Path) -> Result<u64, String> {
         return Ok(0);
     }
     let mut count: u64 = 0;
-    for entry in std::fs::read_dir(conversations_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(conversations_dir).str_err()? {
+        let entry = entry.str_err()?;
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let file_type = entry.file_type().str_err()?;
         if !file_type.is_file() {
             continue;
         }

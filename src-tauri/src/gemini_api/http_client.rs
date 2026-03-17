@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use crate::str_err::ToStringErr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -244,7 +246,7 @@ impl GeminiExporter {
         for _ in 0..attempts {
             self.before_request("http_get")
                 .await
-                .map_err(|e| e.to_string())?;
+                .str_err()?;
 
             let mut req = self.client.get(url);
             if !params.is_empty() {

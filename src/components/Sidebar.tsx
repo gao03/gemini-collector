@@ -4,9 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Virtuoso } from "react-virtuoso";
 import { ConversationSummary, Account, SearchResult } from "../data/types";
 import { useTheme } from "../theme";
-
-const IS_WINDOWS = navigator.userAgent.includes("Windows");
-const DRAG_REGION_HEIGHT = IS_WINDOWS ? 8 : 52;
+import { DRAG_REGION_HEIGHT } from "../utils/platform";
+import { formatDateTime } from "../utils/dateTime";
+import { ImportIcon, ExportIcon, TrashIcon, CopyIcon, CheckIcon, SearchIcon, SyncIcon } from "./Icons";
 
 interface SidebarProps {
   conversations: ConversationSummary[];
@@ -36,21 +36,6 @@ interface SidebarProps {
   onDeleteConversation?: (convId: string) => void;
   onCancelList?: () => void;
   onCancelFull?: () => void;
-}
-
-function formatConvTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${y}-${m}-${day} ${hh}:${mm}`;
-  } catch {
-    return iso;
-  }
 }
 
 export function Sidebar({
@@ -793,7 +778,7 @@ function ConversationItem({ conversation, selected, onClick, syncing, onSync, so
           {conversation.title}
         </div>
         <div style={{ fontSize: 11, color: isLost ? lostMetaColor : t.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
-          <span>{formatConvTime(sortMode === "created_desc" && conversation.createdAt ? conversation.createdAt : conversation.updatedAt)}</span>
+          <span>{formatDateTime(sortMode === "created_desc" && conversation.createdAt ? conversation.createdAt : conversation.updatedAt)}</span>
           <span style={{ color: isLost ? lostMetaColor : t.textMuted, opacity: 0.6 }}>·</span>
           <span>{conversation.messageCount} 条</span>
         </div>
@@ -839,77 +824,3 @@ function PendingDot() {
 }
 
 
-function ImportIcon({ spinning, color }: { spinning: boolean; color: string }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      style={{ animation: spinning ? "spin 0.9s linear infinite" : "none" }}>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="17 8 12 3 7 8" />
-      <line x1="12" y1="3" x2="12" y2="15" />
-    </svg>
-  );
-}
-
-function ExportIcon({ spinning, color }: { spinning: boolean; color: string }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      style={{ animation: spinning ? "spin 0.9s linear infinite" : "none" }}>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  );
-}
-
-function TrashIcon({ color }: { color: string }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-      <line x1="10" y1="11" x2="10" y2="17" />
-      <line x1="14" y1="11" x2="14" y2="17" />
-    </svg>
-  );
-}
-
-function CopyIcon({ color }: { color: string }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-    </svg>
-  );
-}
-
-function CheckIcon({ color }: { color: string }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
-function SearchIcon({ color, style }: { color: string; style?: React.CSSProperties }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={style}>
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  );
-}
-
-function SyncIcon({ spinning, color, small = false }: { spinning: boolean; color: string; small?: boolean }) {
-  const size = small ? 11 : 14;
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
-      style={{ animation: spinning ? "spin 0.9s linear infinite" : "none" }}>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-      <polyline points="23 4 23 10 17 10" />
-      <polyline points="1 20 1 14 7 14" />
-      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-    </svg>
-  );
-}

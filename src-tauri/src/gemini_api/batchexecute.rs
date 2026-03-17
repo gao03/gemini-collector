@@ -8,6 +8,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::str_err::ToStringErr;
 use crate::protocol::{
     has_batchexecute_session_error, parse_batchexecute_response, ProtocolError, GEMINI_BASE,
 };
@@ -79,7 +80,7 @@ impl GeminiExporter {
         // 执行前等待
         self.before_request(&format!("batchexecute:{}", rpcid))
             .await
-            .map_err(|e| e.to_string())?;
+            .str_err()?;
 
         // 发送 POST 请求
         let resp = self

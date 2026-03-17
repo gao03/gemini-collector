@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+use crate::str_err::ToStringErr;
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, BoostQuery, Occur, TermQuery};
@@ -82,7 +84,7 @@ fn load_mtimes(account_dir: &Path) -> HashMap<String, f64> {
 }
 
 fn save_mtimes(account_dir: &Path, mtimes: &HashMap<String, f64>) -> Result<(), String> {
-    let json = serde_json::to_string(mtimes).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(mtimes).str_err()?;
     std::fs::write(mtime_path(account_dir), json)
         .map_err(|e| format!("保存 mtime 文件失败: {}", e))
 }
@@ -98,37 +100,11 @@ fn file_mtime(path: &Path) -> f64 {
         .unwrap_or(0.0)
 }
 
-// ── action_card 过滤 (与前端 visibleMessages 一致) ──────────────────────
+// ── action_card / hidden 过滤 ──────────────────────────────────────────
 
-fn is_action_card_text(text: &str) -> bool {
-    text.contains("action_card_content")
-        || text.trim() == "没问题，我可以帮忙。在这些媒体服务提供方中，你想使用哪个？"
-}
-
-pub fn action_card_indices_to_remove(
-    messages: &[serde_json::Value],
-) -> std::collections::HashSet<usize> {
-    let mut to_remove = std::collections::HashSet::new();
-    for (i, msg) in messages.iter().enumerate() {
-        let text = msg.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        if is_action_card_text(text) {
-            to_remove.insert(i);
-            for j in (0..i).rev() {
-                let role = messages[j]
-                    .get("role")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if role == "user" {
-                    to_remove.insert(j);
-                    break;
-                }
-                if role == "model" {
-                    break;
-                }
-            }
-        }
-    }
-    to_remove
+/// 检查消息行是否被标记为 hidden（由 storage::turns_to_jsonl_rows 在写入时标记）。
+fn is_hidden(msg: &serde_json::Value) -> bool {
+    msg.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 // ── 索引写入 ────────────────────────────────────────────────────────────
@@ -145,7 +121,7 @@ fn index_jsonl_into_writer(
     let title_field = schema.get_field(F_TITLE).unwrap();
     let text_field = schema.get_field(F_TEXT).unwrap();
 
-    let raw = std::fs::read_to_string(jsonl_path).map_err(|e| e.to_string())?;
+    let raw = std::fs::read_to_string(jsonl_path).str_err()?;
     let mut title = String::new();
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -169,10 +145,8 @@ fn index_jsonl_into_writer(
         }
     }
 
-    let to_remove = action_card_indices_to_remove(&messages);
-
-    for (i, msg) in messages.iter().enumerate() {
-        if to_remove.contains(&i) {
+    for msg in &messages {
+        if is_hidden(msg) {
             continue;
         }
         let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -187,7 +161,7 @@ fn index_jsonl_into_writer(
                     title_field => title.as_str(),
                     text_field => text,
                 ))
-                .map_err(|e| e.to_string())?;
+                .str_err()?;
         }
     }
 
@@ -250,7 +224,7 @@ pub fn index_all(
         .map_err(|e| format!("创建 writer 失败: {}", e))?;
 
     let mut file_ids: HashSet<String> = HashSet::new();
-    let entries = std::fs::read_dir(conversations_dir).map_err(|e| e.to_string())?;
+    let entries = std::fs::read_dir(conversations_dir).str_err()?;
     let mut total = 0u32;
     let mut indexed = 0u32;
     let mut skipped = 0u32;
@@ -454,7 +428,7 @@ pub fn search_messages(
     let query_lower = query_str.to_lowercase();
     let mut results = Vec::new();
     for (score, doc_addr) in top_docs {
-        let doc: TantivyDocument = searcher.doc(doc_addr).map_err(|e| e.to_string())?;
+        let doc: TantivyDocument = searcher.doc(doc_addr).str_err()?;
         let text = doc
             .get_first(text_field)
             .and_then(|v| v.as_str())

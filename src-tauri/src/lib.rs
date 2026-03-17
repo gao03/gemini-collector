@@ -6,6 +6,7 @@ mod import;
 pub mod media;
 pub mod protocol;
 mod search;
+pub mod str_err;
 pub mod storage;
 pub mod turn_parser;
 mod worker_host;
@@ -17,6 +18,7 @@ use tauri::Manager;
 use worker_host::EnqueueJobRequest;
 
 use export::{resolve_account_id_arg, value_to_non_empty_string};
+use str_err::ToStringErr;
 
 fn read_account_registry_entry(data_dir: &Path, account_id: &str) -> Result<serde_json::Value, String> {
     let accounts_file = data_dir.join("accounts.json");
@@ -25,9 +27,9 @@ fn read_account_registry_entry(data_dir: &Path, account_id: &str) -> Result<serd
     }
 
     let registry: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&accounts_file).map_err(|e| e.to_string())?,
+        &std::fs::read_to_string(&accounts_file).str_err()?,
     )
-    .map_err(|e| e.to_string())?;
+    .str_err()?;
 
     let entries = registry
         .get("accounts")
@@ -72,15 +74,6 @@ fn is_list_sync_pending(data_dir: &Path, data_dir_rel: &str) -> bool {
     matches!(phase, Some(p) if p != "done")
 }
 
-fn normalize_conversation_id(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if let Some(stripped) = trimmed.strip_prefix("c_") {
-        stripped.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 fn conversation_meta_info(jsonl_file: &Path) -> (bool, Option<String>) {
     let raw = match std::fs::read_to_string(jsonl_file) {
         Ok(v) => v,
@@ -104,28 +97,28 @@ fn delete_conversation(
     account_id: String,
     conversation_id: String,
 ) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
-    let bare_id = normalize_conversation_id(&conversation_id);
+    let bare_id = protocol::strip_c_prefix(&conversation_id);
 
     // 删除 .jsonl 文件
     let conv_file = account_dir.join("conversations").join(format!("{}.jsonl", bare_id));
     if conv_file.exists() {
-        std::fs::remove_file(&conv_file).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&conv_file).str_err()?;
     }
 
     // 从 conversations.json 的 items 中移除该条记录，并取得新数量
     let index_file = account_dir.join("conversations.json");
     let new_count: Option<usize> = if index_file.exists() {
-        let raw = std::fs::read_to_string(&index_file).map_err(|e| e.to_string())?;
+        let raw = std::fs::read_to_string(&index_file).str_err()?;
         if let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(items) = parsed.get_mut("items").and_then(|v| v.as_array_mut()) {
                 items.retain(|item| {
                     item.get("id").and_then(|v| v.as_str()) != Some(bare_id.as_str())
                 });
                 let count = items.len();
-                let serialized = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
-                std::fs::write(&index_file, serialized).map_err(|e| e.to_string())?;
+                let serialized = serde_json::to_string_pretty(&parsed).str_err()?;
+                std::fs::write(&index_file, serialized).str_err()?;
                 Some(count)
             } else {
                 None
@@ -141,12 +134,12 @@ fn delete_conversation(
     if let Some(count) = new_count {
         let meta_file = account_dir.join("meta.json");
         if meta_file.exists() {
-            let raw = std::fs::read_to_string(&meta_file).map_err(|e| e.to_string())?;
+            let raw = std::fs::read_to_string(&meta_file).str_err()?;
             if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&raw) {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert("conversationCount".to_string(), serde_json::json!(count));
-                    let serialized = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
-                    std::fs::write(&meta_file, serialized).map_err(|e| e.to_string())?;
+                    let serialized = serde_json::to_string_pretty(&meta).str_err()?;
+                    std::fs::write(&meta_file, serialized).str_err()?;
                 }
             }
         }
@@ -172,7 +165,7 @@ fn clear_account_data(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "缺少 account_id/accountId 参数".to_string())?;
 
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
     let media_dir = account_dir.join("media");
@@ -182,19 +175,19 @@ fn clear_account_data(
     let meta_file = account_dir.join("meta.json");
 
     if conversations_dir.exists() {
-        std::fs::remove_dir_all(&conversations_dir).map_err(|e| e.to_string())?;
+        std::fs::remove_dir_all(&conversations_dir).str_err()?;
     }
     if media_dir.exists() {
-        std::fs::remove_dir_all(&media_dir).map_err(|e| e.to_string())?;
+        std::fs::remove_dir_all(&media_dir).str_err()?;
     }
     if conversations_file.exists() {
-        std::fs::remove_file(&conversations_file).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&conversations_file).str_err()?;
     }
     if sync_state_file.exists() {
-        std::fs::remove_file(&sync_state_file).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&sync_state_file).str_err()?;
     }
     if media_manifest_file.exists() {
-        std::fs::remove_file(&media_manifest_file).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&media_manifest_file).str_err()?;
     }
     // 清理搜索索引
     let search_idx_dir = account_dir.join("search_index");
@@ -206,8 +199,8 @@ fn clear_account_data(
         let _ = std::fs::remove_file(&search_mtimes);
     }
 
-    std::fs::create_dir_all(&conversations_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&conversations_dir).str_err()?;
+    std::fs::create_dir_all(&media_dir).str_err()?;
 
     // Keep account mapping while resetting local sync counters in meta.
     let registry_entry = read_account_registry_entry(&data_dir, &account_id).ok();
@@ -219,7 +212,7 @@ fn clear_account_data(
         .and_then(|v| value_to_non_empty_string(v.get("authuser")));
 
     let mut meta_val = if meta_file.exists() {
-        let raw = std::fs::read_to_string(&meta_file).map_err(|e| e.to_string())?;
+        let raw = std::fs::read_to_string(&meta_file).str_err()?;
         serde_json::from_str::<serde_json::Value>(&raw).unwrap_or_else(|_| serde_json::json!({}))
     } else {
         serde_json::json!({})
@@ -281,8 +274,8 @@ fn clear_account_data(
             .unwrap_or(serde_json::Value::Null),
     );
 
-    let serialized = serde_json::to_string_pretty(&meta_val).map_err(|e| e.to_string())?;
-    std::fs::write(&meta_file, serialized).map_err(|e| e.to_string())?;
+    let serialized = serde_json::to_string_pretty(&meta_val).str_err()?;
+    std::fs::write(&meta_file, serialized).str_err()?;
 
     Ok("{\"status\":\"ok\"}".to_string())
 }
@@ -291,7 +284,7 @@ fn clear_account_data(
 /// Returns a JSON array of Account objects (matches AccountMeta schema), or "[]".
 #[tauri::command]
 fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let accounts_file = data_dir.join("accounts.json");
 
     if !accounts_file.exists() {
@@ -299,9 +292,9 @@ fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
     }
 
     let registry: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&accounts_file).map_err(|e| e.to_string())?,
+        &std::fs::read_to_string(&accounts_file).str_err()?,
     )
-    .map_err(|e| e.to_string())?;
+    .str_err()?;
 
     let entries = match registry.get("accounts").and_then(|v| v.as_array()) {
         Some(a) => a.clone(),
@@ -360,7 +353,7 @@ fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
         }));
     }
 
-    serde_json::to_string(&result).map_err(|e| e.to_string())
+    serde_json::to_string(&result).str_err()
 }
 
 // ============================================================================
@@ -468,9 +461,9 @@ fn extract_cookies_via_cookie_manager(
 async fn open_google_login(app: tauri::AppHandle) -> Result<String, String> {
     use tauri::webview::PageLoadEvent;
 
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let webview_data_dir = data_dir.join("webview_session");
-    std::fs::create_dir_all(&webview_data_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&webview_data_dir).str_err()?;
 
     // 防止重复打开
     if app.get_webview_window("google_login").is_some() {
@@ -564,8 +557,8 @@ async fn open_google_login(app: tauri::AppHandle) -> Result<String, String> {
     let account_id = protocol::email_to_account_id(&m.email);
     log::info!("写入账号数据: email={}, account_id={}", m.email, account_id);
     let account_dir = data_dir.join("accounts").join(&account_id);
-    std::fs::create_dir_all(account_dir.join("conversations")).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(account_dir.join("media")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(account_dir.join("conversations")).str_err()?;
+    std::fs::create_dir_all(account_dir.join("media")).str_err()?;
 
     let name = m
         .email
@@ -637,7 +630,7 @@ async fn open_google_login(_app: tauri::AppHandle) -> Result<String, String> {
 /// 从本机浏览器读取 cookies，发现所有 Gemini 账号并写入 accounts.json。
 #[tauri::command]
 async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
 
     // 读取浏览器 cookies
     let all_cookies = tokio::task::spawn_blocking(|| {
@@ -666,8 +659,8 @@ async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
     for m in &mappings {
         let account_id = protocol::email_to_account_id(&m.email);
         let account_dir = data_dir.join("accounts").join(&account_id);
-        std::fs::create_dir_all(account_dir.join("conversations")).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(account_dir.join("media")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(account_dir.join("conversations")).str_err()?;
+        std::fs::create_dir_all(account_dir.join("media")).str_err()?;
 
         let name = m.email.split('@').next().unwrap_or(&account_id).to_string();
         let avatar_text = name
@@ -690,8 +683,8 @@ async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
             "authuser": m.authuser,
         });
 
-        storage::write_accounts_json(&data_dir, &info).map_err(|e| e.to_string())?;
-        storage::write_account_meta(&account_dir, &info).map_err(|e| e.to_string())?;
+        storage::write_accounts_json(&data_dir, &info).str_err()?;
+        storage::write_account_meta(&account_dir, &info).str_err()?;
         imported_ids.push(account_id);
     }
 
@@ -707,7 +700,7 @@ async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
 /// 并保留各账号已有的同步数据（conversationCount / lastSyncAt 等）。
 #[tauri::command]
 async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
 
     let all_cookies = tokio::task::spawn_blocking(|| cookies::get_cookies_from_local_browser())
         .await
@@ -752,8 +745,8 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
     for m in &mappings {
         let account_id = protocol::email_to_account_id(&m.email);
         let account_dir = data_dir.join("accounts").join(&account_id);
-        std::fs::create_dir_all(account_dir.join("conversations")).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(account_dir.join("media")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(account_dir.join("conversations")).str_err()?;
+        std::fs::create_dir_all(account_dir.join("media")).str_err()?;
 
         // 读取现有 meta.json，保留同步字段
         let existing_meta: serde_json::Value = {
@@ -798,8 +791,8 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
         });
         std::fs::write(
             account_dir.join("meta.json"),
-            serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
-        ).map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&meta).str_err()?,
+        ).str_err()?;
 
         let added_at = existing_entries.get(&account_id)
             .and_then(|v| v.get("addedAt").and_then(|v| v.as_str()))
@@ -824,8 +817,8 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
     });
     std::fs::write(
         data_dir.join("accounts.json"),
-        serde_json::to_string_pretty(&accounts_data).map_err(|e| e.to_string())?,
-    ).map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&accounts_data).str_err()?,
+    ).str_err()?;
 
     Ok(serde_json::json!({
         "status": "ok",
@@ -855,7 +848,7 @@ async fn cancel_job(
 /// Read `accounts/{id}/conversations.json` and return the `items` array as JSON string.
 #[tauri::command]
 fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conv_file = data_dir
         .join("accounts")
@@ -866,8 +859,8 @@ fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Res
         return Ok("[]".to_string());
     }
 
-    let raw = std::fs::read_to_string(&conv_file).map_err(|e| e.to_string())?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let raw = std::fs::read_to_string(&conv_file).str_err()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).str_err()?;
     let mut items = parsed
         .get("items")
         .and_then(|v| v.as_array())
@@ -911,13 +904,13 @@ fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Res
         }
     }
 
-    serde_json::to_string(&items).map_err(|e| e.to_string())
+    serde_json::to_string(&items).str_err()
 }
 
 /// Return absolute media directory path for an account: `accounts/{id}/media`.
 #[tauri::command]
 fn get_account_media_dir(app: tauri::AppHandle, account_id: String) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let media_dir = data_dir
         .join("accounts")
         .join(account_id)
@@ -933,14 +926,14 @@ fn update_search_index(
     account_id: String,
     conversation_ids: Vec<String>,
 ) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
 
     let index = search::open_or_create_index(&account_dir)?;
     let mut indexed = 0u32;
     for cid in &conversation_ids {
-        let bare = normalize_conversation_id(cid);
+        let bare = protocol::strip_c_prefix(cid);
         let jsonl = conversations_dir.join(format!("{}.jsonl", bare));
         if jsonl.exists() {
             search::index_conversation(&index, &account_dir, &bare, &jsonl)?;
@@ -957,24 +950,24 @@ fn search_conversations(
     query: String,
     limit: Option<u32>,
 ) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
 
     let index = search::open_or_create_index(&account_dir)?;
     let results = search::search_messages(&index, &query, limit.unwrap_or(50))?;
-    serde_json::to_string(&results).map_err(|e| e.to_string())
+    serde_json::to_string(&results).str_err()
 }
 
 #[tauri::command]
 fn rebuild_search_index(app: tauri::AppHandle, account_id: String) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conversations_dir = account_dir.join("conversations");
 
     // 删除旧索引强制重建
     let search_idx_dir = account_dir.join("search_index");
     if search_idx_dir.exists() {
-        std::fs::remove_dir_all(&search_idx_dir).map_err(|e| e.to_string())?;
+        std::fs::remove_dir_all(&search_idx_dir).str_err()?;
     }
     let search_mtimes = account_dir.join("search_mtimes.json");
     if search_mtimes.exists() {
@@ -994,8 +987,8 @@ fn load_conversation_detail(
     account_id: String,
     conversation_id: String,
 ) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let bare_id = normalize_conversation_id(&conversation_id);
+    let data_dir = app.path().app_data_dir().str_err()?;
+    let bare_id = protocol::strip_c_prefix(&conversation_id);
     if bare_id.is_empty() {
         return Ok("null".to_string());
     }
@@ -1010,7 +1003,7 @@ fn load_conversation_detail(
         return Ok("null".to_string());
     }
 
-    let raw = std::fs::read_to_string(&jsonl_file).map_err(|e| e.to_string())?;
+    let raw = std::fs::read_to_string(&jsonl_file).str_err()?;
     let mut meta: Option<serde_json::Value> = None;
     let mut messages: Vec<serde_json::Value> = Vec::new();
     let mut parse_error_count: usize = 0;
@@ -1126,7 +1119,7 @@ fn load_conversation_detail(
         "messages": messages,
     });
 
-    serde_json::to_string(&conversation).map_err(|e| e.to_string())
+    serde_json::to_string(&conversation).str_err()
 }
 
 // ============================================================================

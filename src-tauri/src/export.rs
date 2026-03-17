@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, FixedOffset, Local};
 use tauri::Manager;
 
-use crate::search;
 use crate::storage;
+use crate::str_err::ToStringErr;
 
 // ============================================================================
 // 共享工具（从 lib.rs 迁入）
@@ -88,9 +88,9 @@ fn count_files_and_bytes_recursive(root: &Path) -> Result<(u64, u64), String> {
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        for entry in std::fs::read_dir(&dir).str_err()? {
+            let entry = entry.str_err()?;
+            let file_type = entry.file_type().str_err()?;
             if file_type.is_dir() {
                 stack.push(entry.path());
                 continue;
@@ -99,7 +99,7 @@ fn count_files_and_bytes_recursive(root: &Path) -> Result<(u64, u64), String> {
                 continue;
             }
             files += 1;
-            total_bytes += entry.metadata().map_err(|e| e.to_string())?.len();
+            total_bytes += entry.metadata().str_err()?.len();
         }
     }
 
@@ -158,6 +158,17 @@ fn build_account_export_stats(account_dir: &Path, account_id: &str) -> Result<Ac
 // ZIP 打包
 // ============================================================================
 
+/// 已压缩的媒体扩展名，使用 Stored 避免无效 Deflate
+fn should_store(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "heic" | "heif"
+            | "mp4" | "webm" | "mov" | "avi" | "mkv"
+            | "mp3" | "aac" | "ogg" | "opus" | "flac"
+            | "zip" | "gz" | "zst" | "br" | "xz" | "bz2")
+    )
+}
+
 fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
     use std::io::{Read, Write};
     use zip::write::SimpleFileOptions;
@@ -170,8 +181,10 @@ fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
     let file = std::fs::File::create(zip_path)
         .map_err(|e| format!("创建 zip 文件失败: {}", e))?;
     let mut zip_writer = zip::ZipWriter::new(file);
-    let options = SimpleFileOptions::default()
+    let opts_deflate = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
+    let opts_stored = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored);
 
     // 递归收集所有文件
     let mut entries: Vec<std::path::PathBuf> = Vec::new();
@@ -187,11 +200,12 @@ fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
 
         if entry_path.is_dir() {
             zip_writer
-                .add_directory(&zip_entry_name, options)
+                .add_directory(&zip_entry_name, opts_stored)
                 .map_err(|e| format!("添加目录失败: {}", e))?;
         } else {
+            let opts = if should_store(entry_path) { opts_stored } else { opts_deflate };
             zip_writer
-                .start_file(&zip_entry_name, options)
+                .start_file(&zip_entry_name, opts)
                 .map_err(|e| format!("添加文件失败: {}", e))?;
             let mut f = std::fs::File::open(entry_path)
                 .map_err(|e| format!("打开文件失败: {}", e))?;
@@ -236,7 +250,7 @@ pub fn get_account_range_bytes(
     #[allow(non_snake_case)] afterDate: Option<String>,
 ) -> Result<String, String> {
     let account_id = resolve_account_id_arg(account_id, accountId)?;
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     if !account_dir.exists() {
         return Err(format!("账号目录不存在: {}", account_id));
@@ -251,13 +265,13 @@ pub fn get_account_range_bytes(
 
     if !conversations_dir.exists() {
         let result = serde_json::json!({ "totalBytes": 0u64 });
-        return serde_json::to_string(&result).map_err(|e| e.to_string());
+        return serde_json::to_string(&result).str_err();
     }
 
     let mut total_bytes: u64 = 0;
 
-    for entry in std::fs::read_dir(&conversations_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(&conversations_dir).str_err()? {
+        let entry = entry.str_err()?;
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
             continue;
@@ -315,7 +329,7 @@ pub fn get_account_range_bytes(
     }
 
     let result = serde_json::json!({ "totalBytes": total_bytes });
-    serde_json::to_string(&result).map_err(|e| e.to_string())
+    serde_json::to_string(&result).str_err()
 }
 
 #[tauri::command]
@@ -325,13 +339,13 @@ pub fn get_account_export_stats(
     #[allow(non_snake_case)] accountId: Option<String>,
 ) -> Result<String, String> {
     let account_id = resolve_account_id_arg(account_id, accountId)?;
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     if !account_dir.exists() {
         return Err(format!("账号目录不存在: {}", account_id));
     }
     let stats = build_account_export_stats(&account_dir, &account_id)?;
-    serde_json::to_string(&stats).map_err(|e| e.to_string())
+    serde_json::to_string(&stats).str_err()
 }
 
 #[tauri::command]
@@ -343,7 +357,7 @@ pub fn export_account_zip(
     #[allow(non_snake_case)] outputDir: Option<String>,
 ) -> Result<String, String> {
     let account_id = resolve_account_id_arg(account_id, accountId)?;
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     if !account_dir.exists() {
         return Err(format!("账号目录不存在: {}", account_id));
@@ -367,7 +381,7 @@ pub fn export_account_zip(
     let export_dir = preferred_export_dir
         .unwrap_or_else(|| dirs::download_dir().unwrap_or_else(|| data_dir.join("exports")));
     if !export_dir.exists() {
-        std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&export_dir).str_err()?;
     }
     if !export_dir.is_dir() {
         return Err(format!("导出目录不可用: {}", export_dir.display()));
@@ -375,12 +389,12 @@ pub fn export_account_zip(
 
     let zip_path = export_dir.join(file_name);
     if zip_path.exists() {
-        std::fs::remove_file(&zip_path).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&zip_path).str_err()?;
     }
 
     zip_account_dir(&account_dir, &zip_path)?;
     let zip_size_bytes = std::fs::metadata(&zip_path)
-        .map_err(|e| e.to_string())?
+        .str_err()?
         .len();
 
     let result = serde_json::json!({
@@ -395,7 +409,7 @@ pub fn export_account_zip(
         "totalBytes": stats.total_bytes,
         "estimatedZipBytes": stats.estimated_zip_bytes,
     });
-    serde_json::to_string(&result).map_err(|e| e.to_string())
+    serde_json::to_string(&result).str_err()
 }
 
 // ============================================================================
@@ -469,7 +483,7 @@ struct KelivoItem {
 }
 
 fn parse_kelivo_jsonl(path: &Path, media_dir: &Path, after_date: Option<&str>) -> Result<Option<KelivoItem>, String> {
-    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let raw = std::fs::read_to_string(path).str_err()?;
     let mut meta: Option<serde_json::Value> = None;
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -478,7 +492,7 @@ fn parse_kelivo_jsonl(path: &Path, media_dir: &Path, after_date: Option<&str>) -
         if s.is_empty() {
             continue;
         }
-        let obj: serde_json::Value = serde_json::from_str(s).map_err(|e| e.to_string())?;
+        let obj: serde_json::Value = serde_json::from_str(s).str_err()?;
         match obj.get("type").and_then(|v| v.as_str()) {
             Some("meta") => {
                 if meta.is_none() {
@@ -511,10 +525,8 @@ fn parse_kelivo_jsonl(path: &Path, media_dir: &Path, after_date: Option<&str>) -
     let mut message_ids: Vec<serde_json::Value> = Vec::new();
     let mut media_ids: Vec<String> = Vec::new();
 
-    let to_remove = search::action_card_indices_to_remove(&messages);
-
-    for (i, msg) in messages.iter().enumerate() {
-        if to_remove.contains(&i) { continue; }
+    for msg in &messages {
+        if msg.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false) { continue; }
         let text = msg.get("text").and_then(|v| v.as_str()).unwrap_or("");
         let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let role_raw = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
@@ -665,36 +677,39 @@ fn write_kelivo_zip(zip_path: &Path, bin_items: &[KelivoItem], media_dir: &Path)
         "toolEvents": {},
         "geminiThoughtSigs": {},
     });
-    let chats_json = serde_json::to_string(&chats_obj).map_err(|e| e.to_string())?;
+    let chats_json = serde_json::to_string(&chats_obj).str_err()?;
 
     if let Some(parent) = zip_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent).str_err()?;
     }
 
-    let file = std::fs::File::create(zip_path).map_err(|e| e.to_string())?;
+    let file = std::fs::File::create(zip_path).str_err()?;
     let mut zw = ZipWriter::new(file);
-    let opts = SimpleFileOptions::default()
+    let opts_deflate = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .compression_level(Some(6));
+    let opts_stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored);
 
-    zw.start_file("chats.json", opts).map_err(|e| e.to_string())?;
-    zw.write_all(chats_json.as_bytes()).map_err(|e| e.to_string())?;
+    zw.start_file("chats.json", opts_deflate).str_err()?;
+    zw.write_all(chats_json.as_bytes()).str_err()?;
 
     let mut media_found = 0usize;
     let mut media_missing = 0usize;
     for mid in &all_mids {
         let src = media_dir.join(mid);
         if src.exists() {
-            let data = std::fs::read(&src).map_err(|e| e.to_string())?;
-            zw.start_file(format!("upload/{}", mid), opts).map_err(|e| e.to_string())?;
-            zw.write_all(&data).map_err(|e| e.to_string())?;
+            let data = std::fs::read(&src).str_err()?;
+            let opts = if should_store(&src) { opts_stored } else { opts_deflate };
+            zw.start_file(format!("upload/{}", mid), opts).str_err()?;
+            zw.write_all(&data).str_err()?;
             media_found += 1;
         } else {
             media_missing += 1;
         }
     }
 
-    zw.finish().map_err(|e| e.to_string())?;
+    zw.finish().str_err()?;
 
     Ok((all_convs.len(), all_msgs.len(), media_found, media_missing))
 }
@@ -716,7 +731,7 @@ fn kelivo_export_impl(
     }
 
     let mut jsonl_files: Vec<PathBuf> = std::fs::read_dir(&conv_dir)
-        .map_err(|e| e.to_string())?
+        .str_err()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
@@ -813,7 +828,7 @@ pub async fn export_account_kelivo(
     output_path: String,
     after_date: Option<String>,
 ) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let output = PathBuf::from(&output_path);
     let after = after_date.clone();
 
@@ -828,7 +843,7 @@ pub async fn export_account_kelivo(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .str_err()?
 }
 
 #[tauri::command]
@@ -849,7 +864,7 @@ pub async fn export_account_kelivo_split(
         _ => None,
     };
 
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().str_err()?;
     let output = PathBuf::from(&output_path);
     let after = after_date.clone();
 
@@ -864,5 +879,5 @@ pub async fn export_account_kelivo_split(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .str_err()?
 }
