@@ -8,6 +8,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::browser_info;
 use crate::str_err::ToStringErr;
 use crate::protocol::{
     has_batchexecute_session_error, parse_batchexecute_response, ProtocolError, GEMINI_BASE,
@@ -92,6 +93,12 @@ impl GeminiExporter {
                 "Content-Type",
                 "application/x-www-form-urlencoded;charset=UTF-8",
             )
+            .header("accept", browser_info::API_ACCEPT)
+            .header("sec-fetch-dest", browser_info::API_SEC_FETCH_DEST)
+            .header("sec-fetch-mode", browser_info::API_SEC_FETCH_MODE)
+            .header("sec-fetch-site", browser_info::API_SEC_FETCH_SITE)
+            .header("origin", browser_info::API_ORIGIN)
+            .header("referer", browser_info::API_REFERER)
             .header("x-goog-ext-73010989-jspb", "[0]")
             .header(
                 "x-goog-ext-525001261-jspb",

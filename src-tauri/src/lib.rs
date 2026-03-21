@@ -1,3 +1,4 @@
+pub mod browser_info;
 pub mod cookies;
 mod export;
 mod sync;

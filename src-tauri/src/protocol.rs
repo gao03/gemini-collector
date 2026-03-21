@@ -18,11 +18,16 @@ pub const REQUEST_JITTER_MODE: f64 = 0.14;
 pub const REQUEST_BACKOFF_MAX_SECONDS: f64 = 120.0;
 pub const REQUEST_BACKOFF_LIMIT_FAILURES: u32 = 10;
 
-pub const BROWSER_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-     AppleWebKit/537.36 (KHTML, like Gecko) \
-     Chrome/131.0.0.0 Safari/537.36";
-pub const BROWSER_ACCEPT_LANGUAGE: &str = "zh-CN,zh;q=0.9,en;q=0.8";
+/// 浏览器 User-Agent（从本地 Chrome 检测，失败时用 fallback）。
+/// 保留为函数调用的 wrapper，方便旧代码引用。
+pub fn browser_user_agent() -> &'static str {
+    crate::browser_info::build_user_agent()
+}
+
+/// 浏览器 Accept-Language（从本地 Chrome 偏好读取，失败时用 fallback）。
+pub fn browser_accept_language() -> &'static str {
+    crate::browser_info::detect_accept_language()
+}
 
 // ============================================================================
 // 错误类型

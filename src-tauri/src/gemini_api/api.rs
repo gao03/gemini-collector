@@ -11,6 +11,7 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+use crate::browser_info;
 use crate::cookies::list_accounts;
 use crate::str_err::ToStringErr;
 use crate::protocol::{
@@ -96,22 +97,34 @@ impl GeminiExporter {
         }
 
         let url = format!("{}/app", GEMINI_BASE);
+        let navigate_headers: Vec<(&str, &str)> = vec![
+            ("accept", browser_info::NAVIGATE_ACCEPT),
+            ("sec-fetch-dest", browser_info::NAVIGATE_SEC_FETCH_DEST),
+            ("sec-fetch-mode", browser_info::NAVIGATE_SEC_FETCH_MODE),
+            ("sec-fetch-site", browser_info::NAVIGATE_SEC_FETCH_SITE),
+            ("sec-fetch-user", browser_info::NAVIGATE_SEC_FETCH_USER),
+            ("upgrade-insecure-requests", browser_info::NAVIGATE_UPGRADE_INSECURE_REQUESTS),
+            ("x-browser-channel", browser_info::NAVIGATE_X_BROWSER_CHANNEL),
+            ("x-browser-year", browser_info::browser_year()),
+            ("x-browser-copyright", browser_info::browser_copyright()),
+        ];
         let resp = self
             .client_get_with_retry(
                 &url,
                 &params,
                 6,
                 false, // init_auth 不计入业务请求统计
+                &navigate_headers,
             )
             .await?;
 
         let status = resp.status();
+        let final_url = resp.url().to_string();
+        let html = resp.text().await.str_err()?;
+
         if !status.is_success() {
             return Err(format!("获取 Gemini 页面失败: HTTP {}", status.as_u16()));
         }
-
-        let final_url = resp.url().to_string();
-        let html = resp.text().await.str_err()?;
 
         // 提取 SNlM0e (at token)
         match at_re().captures(&html) {
@@ -192,6 +205,7 @@ impl GeminiExporter {
                     &params,
                     1,
                     false,
+                    &[], // resolve_authuser probe 不需要额外导航 headers
                 )
                 .await
             {

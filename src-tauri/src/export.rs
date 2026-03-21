@@ -169,9 +169,17 @@ fn should_store(path: &Path) -> bool {
     )
 }
 
-fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
-    use zip::write::SimpleFileOptions;
+fn zip_opts_deflate() -> zip::write::SimpleFileOptions {
+    zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+}
 
+fn zip_opts_stored() -> zip::write::SimpleFileOptions {
+    zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+}
+
+fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
     let folder_name = account_dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -180,10 +188,8 @@ fn zip_account_dir(account_dir: &Path, zip_path: &Path) -> Result<(), String> {
     let file = std::fs::File::create(zip_path)
         .map_err(|e| format!("创建 zip 文件失败: {}", e))?;
     let mut zip_writer = zip::ZipWriter::new(file);
-    let opts_deflate = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    let opts_stored = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let opts_deflate = zip_opts_deflate();
+    let opts_stored = zip_opts_stored();
 
     // 递归收集所有文件
     let mut entries: Vec<std::path::PathBuf> = Vec::new();
@@ -268,7 +274,7 @@ pub fn get_account_range_bytes(
     for entry in std::fs::read_dir(&conversations_dir).str_err()? {
         let entry = entry.str_err()?;
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+        if !storage::is_jsonl_file(&path) {
             continue;
         }
 
@@ -518,7 +524,7 @@ fn parse_kelivo_jsonl(path: &Path, media_dir: &Path, after_date: Option<&str>) -
 
     let mut kelivo_msgs: Vec<serde_json::Value> = Vec::new();
     let mut message_ids: Vec<serde_json::Value> = Vec::new();
-    let mut media_ids: Vec<String> = Vec::new();
+    let mut media_ids_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for msg in &messages {
         if msg.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false) { continue; }
@@ -535,8 +541,8 @@ fn parse_kelivo_jsonl(path: &Path, media_dir: &Path, after_date: Option<&str>) -
 
         for att in attachments {
             if let Some(mid) = att.get("mediaId").and_then(|v| v.as_str()) {
-                if !mid.is_empty() && !media_ids.contains(&mid.to_string()) {
-                    media_ids.push(mid.to_string());
+                if !mid.is_empty() {
+                    media_ids_set.insert(mid.to_string());
                 }
             }
         }
@@ -582,6 +588,8 @@ fn parse_kelivo_jsonl(path: &Path, media_dir: &Path, after_date: Option<&str>) -
         .map(|m| serde_json::to_string(m).unwrap_or_default().len() as u64)
         .sum();
     let json_bytes = conv_bytes + msgs_bytes;
+
+    let media_ids: Vec<String> = media_ids_set.into_iter().collect();
 
     let media_bytes: u64 = media_ids.iter()
         .filter_map(|mid| {
@@ -656,9 +664,6 @@ fn pack_bins(items: Vec<KelivoItem>, json_limit: Option<u64>, media_limit: Optio
 }
 
 fn write_kelivo_zip(zip_path: &Path, bin_items: &[KelivoItem], media_dir: &Path) -> Result<(usize, usize, usize, usize), String> {
-    use zip::write::{ZipWriter, SimpleFileOptions};
-    use zip::CompressionMethod;
-
     let all_convs: Vec<&serde_json::Value> = bin_items.iter().map(|it| &it.kelivo_conv).collect();
     let all_msgs: Vec<&serde_json::Value> = bin_items.iter().flat_map(|it| it.kelivo_msgs.iter()).collect();
     let mut all_mids: Vec<&str> = bin_items.iter().flat_map(|it| it.media_ids.iter().map(|s| s.as_str())).collect();
@@ -679,12 +684,9 @@ fn write_kelivo_zip(zip_path: &Path, bin_items: &[KelivoItem], media_dir: &Path)
     }
 
     let file = std::fs::File::create(zip_path).str_err()?;
-    let mut zw = ZipWriter::new(file);
-    let opts_deflate = SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Deflated)
-        .compression_level(Some(6));
-    let opts_stored = SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Stored);
+    let mut zw = zip::ZipWriter::new(file);
+    let opts_deflate = zip_opts_deflate();
+    let opts_stored = zip_opts_stored();
 
     zw.start_file("chats.json", opts_deflate).str_err()?;
     zw.write_all(chats_json.as_bytes()).str_err()?;
@@ -729,7 +731,7 @@ fn kelivo_export_impl(
         .str_err()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
+        .filter(|p| storage::is_jsonl_file(p))
         .collect();
     jsonl_files.sort();
 

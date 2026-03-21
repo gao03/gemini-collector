@@ -17,7 +17,8 @@ use url::Url;
 use crate::media::{
     append_authuser, is_protected_media_url, media_log_fields, infer_media_type,
 };
-use crate::protocol::{BROWSER_ACCEPT_LANGUAGE, BROWSER_USER_AGENT, GEMINI_BASE};
+use crate::browser_info;
+use crate::protocol::GEMINI_BASE;
 use crate::storage;
 
 use super::GeminiExporter;
@@ -96,14 +97,14 @@ impl GeminiExporter {
             );
             headers.insert(
                 header::ACCEPT_LANGUAGE,
-                header::HeaderValue::from_static(BROWSER_ACCEPT_LANGUAGE),
+                header::HeaderValue::from_str(browser_info::detect_accept_language()).unwrap_or_else(|_| header::HeaderValue::from_static("en-US,en;q=0.9")),
             );
             if let Ok(val) = header::HeaderValue::from_str(referer) {
                 headers.insert(header::REFERER, val);
             }
             headers.insert(
                 header::USER_AGENT,
-                header::HeaderValue::from_static(BROWSER_USER_AGENT),
+                header::HeaderValue::from_str(browser_info::build_user_agent()).unwrap_or_else(|_| header::HeaderValue::from_static("Mozilla/5.0")),
             );
 
             // protected host 才注入 cookie
