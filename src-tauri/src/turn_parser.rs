@@ -238,46 +238,60 @@ fn pick_preferred_media_descriptor(items: &[&Value]) -> Option<usize> {
 
 /// 递归收集所有媒体描述项
 fn collect_media_descriptors<'a>(node: &'a Value, out: &mut Vec<&'a Value>) {
-    let arr = match node.as_array() {
-        Some(a) => a,
-        None => return,
-    };
-    if is_media_descriptor(node) {
-        out.push(node);
-        return;
-    }
-    for child in arr {
-        collect_media_descriptors(child, out);
+    match node {
+        Value::Array(arr) => {
+            if is_media_descriptor(node) {
+                out.push(node);
+                return;
+            }
+            for child in arr {
+                collect_media_descriptors(child, out);
+            }
+        }
+        // 新格式：block[12] 子节点可能是 object，媒体数据在其 value 中
+        Value::Object(map) => {
+            for v in map.values() {
+                collect_media_descriptors(v, out);
+            }
+        }
+        _ => {}
     }
 }
 
 /// 处理 image_generation 双格式结构，同层 3/6 槽位只保留一份主资源
 fn collect_primary_media_descriptors<'a>(node: &'a Value, out: &mut Vec<&'a Value>) {
-    let arr = match node.as_array() {
-        Some(a) => a,
-        None => return,
-    };
-    if is_media_descriptor(node) {
-        out.push(node);
-        return;
-    }
-    // 检查 3/6 槽位
-    let mut slot_candidates: Vec<&Value> = Vec::new();
-    for &idx in &[3usize, 6] {
-        if let Some(item) = arr.get(idx) {
-            if item.is_array() && is_media_descriptor(item) {
-                slot_candidates.push(item);
+    match node {
+        Value::Array(arr) => {
+            if is_media_descriptor(node) {
+                out.push(node);
+                return;
+            }
+            // 检查 3/6 槽位
+            let mut slot_candidates: Vec<&Value> = Vec::new();
+            for &idx in &[3usize, 6] {
+                if let Some(item) = arr.get(idx) {
+                    if item.is_array() && is_media_descriptor(item) {
+                        slot_candidates.push(item);
+                    }
+                }
+            }
+            if !slot_candidates.is_empty() {
+                if let Some(best_idx) = pick_preferred_media_descriptor(&slot_candidates) {
+                    out.push(slot_candidates[best_idx]);
+                }
+                return;
+            }
+            for child in arr {
+                collect_primary_media_descriptors(child, out);
             }
         }
-    }
-    if !slot_candidates.is_empty() {
-        if let Some(best_idx) = pick_preferred_media_descriptor(&slot_candidates) {
-            out.push(slot_candidates[best_idx]);
+        // 新格式：block[12] 子节点可能是 object，媒体数据在其 value 中
+        Value::Object(map) => {
+            for v in map.values() {
+                collect_primary_media_descriptors(v, out);
+            }
         }
-        return;
-    }
-    for child in arr {
-        collect_primary_media_descriptors(child, out);
+        _ => {}
     }
 }
 
