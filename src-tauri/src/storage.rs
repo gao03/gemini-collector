@@ -1039,6 +1039,10 @@ pub fn filter_display_rows(msg_rows: &[Value]) -> Vec<Value> {
 // 目录级文件计数
 // ============================================================================
 
+pub fn is_jsonl_file(path: &Path) -> bool {
+    path.extension().and_then(|s| s.to_str()) == Some("jsonl")
+}
+
 pub fn count_jsonl_files(conversations_dir: &Path) -> Result<u64, String> {
     if !conversations_dir.exists() {
         return Ok(0);
@@ -1051,7 +1055,7 @@ pub fn count_jsonl_files(conversations_dir: &Path) -> Result<u64, String> {
         if !file_type.is_file() {
             continue;
         }
-        if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+        if is_jsonl_file(&path) {
             count += 1;
         }
     }

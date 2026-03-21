@@ -154,7 +154,7 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
             let entry = entry.str_err()?;
             let path = entry.path();
             if !entry.file_type().str_err()?.is_file() { continue; }
-            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") { continue; }
+            if !storage::is_jsonl_file(&path) { continue; }
             let target_path = target_conv_dir.join(path.file_name().unwrap());
             if target_path.exists() {
                 merge_jsonl(&target_path, &path)?;

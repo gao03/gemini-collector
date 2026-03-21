@@ -16,10 +16,10 @@ use std::sync::Arc;
 use rand::distr::{Distribution, Uniform};
 use serde_json::json;
 
+use crate::browser_info;
 use crate::protocol::{
     request_backoff_seconds, REQUEST_BACKOFF_LIMIT_FAILURES, REQUEST_BACKOFF_MAX_SECONDS,
-    REQUEST_DELAY, REQUEST_JITTER_MAX, REQUEST_JITTER_MIN, BROWSER_ACCEPT_LANGUAGE,
-    BROWSER_USER_AGENT, ProtocolError,
+    REQUEST_DELAY, REQUEST_JITTER_MAX, REQUEST_JITTER_MIN, ProtocolError,
 };
 use crate::storage;
 
@@ -38,14 +38,22 @@ pub fn build_http_client(cookies: &HashMap<String, String>) -> reqwest::Client {
         .join("; ");
 
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::USER_AGENT,
-        reqwest::header::HeaderValue::from_static(BROWSER_USER_AGENT),
-    );
-    headers.insert(
-        reqwest::header::ACCEPT_LANGUAGE,
-        reqwest::header::HeaderValue::from_static(BROWSER_ACCEPT_LANGUAGE),
-    );
+    if let Ok(val) = reqwest::header::HeaderValue::from_str(browser_info::build_user_agent()) {
+        headers.insert(reqwest::header::USER_AGENT, val);
+    }
+    if let Ok(val) = reqwest::header::HeaderValue::from_str(browser_info::detect_accept_language())
+    {
+        headers.insert(reqwest::header::ACCEPT_LANGUAGE, val);
+    }
+    // sec-ch-ua 系列
+    if let Ok(val) = reqwest::header::HeaderValue::from_str(browser_info::build_sec_ch_ua()) {
+        headers.insert("sec-ch-ua", val);
+    }
+    headers.insert("sec-ch-ua-mobile", reqwest::header::HeaderValue::from_static("?0"));
+    if let Ok(val) = reqwest::header::HeaderValue::from_str(browser_info::platform_hint()) {
+        headers.insert("sec-ch-ua-platform", val);
+    }
+    // accept-encoding 由 reqwest 的 gzip/brotli/deflate/zstd feature 自动处理
     if !cookie_header.is_empty() {
         if let Ok(val) = reqwest::header::HeaderValue::from_str(&cookie_header) {
             headers.insert(reqwest::header::COOKIE, val);
@@ -235,12 +243,14 @@ impl GeminiExporter {
     ///
     /// `count_as_business_request`：是否计入业务请求成功/失败统计。
     /// init_auth 等不计入。
+    /// `extra_headers`：额外附加的请求 headers（如导航专用 headers）。
     pub async fn client_get_with_retry(
         &self,
         url: &str,
         params: &[(&str, String)],
         attempts: u32,
         count_as_business_request: bool,
+        extra_headers: &[(&str, &str)],
     ) -> Result<reqwest::Response, String> {
         let mut last_err = String::new();
         for _ in 0..attempts {
@@ -252,6 +262,11 @@ impl GeminiExporter {
             if !params.is_empty() {
                 req = req.query(params);
             }
+            for &(name, value) in extra_headers {
+                if let Ok(val) = reqwest::header::HeaderValue::from_str(value) {
+                    req = req.header(name, val);
+                }
+            }
 
             match req.send().await {
                 Ok(resp) => {
@@ -261,10 +276,11 @@ impl GeminiExporter {
                     return Ok(resp);
                 }
                 Err(e) => {
+                    let err_str = e.to_string();
                     if count_as_business_request {
                         self.mark_request_failure();
                     }
-                    last_err = e.to_string();
+                    last_err = err_str;
                 }
             }
         }

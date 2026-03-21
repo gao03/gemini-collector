@@ -1,6 +1,7 @@
 //! Google ListAccounts API 调用：发现 email ↔ authuser 映射。
 
-use crate::protocol::{BROWSER_ACCEPT_LANGUAGE, BROWSER_USER_AGENT, GEMINI_BASE};
+use crate::browser_info;
+use crate::protocol::GEMINI_BASE;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -146,7 +147,7 @@ pub async fn discover_email_authuser_mapping(
     let cookie_header = build_cookie_header(cookies);
 
     let client = reqwest::Client::builder()
-        .user_agent(BROWSER_USER_AGENT)
+        .user_agent(browser_info::build_user_agent())
         .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -155,7 +156,10 @@ pub async fn discover_email_authuser_mapping(
     let resp = client
         .get(list_accounts_url)
         .query(&params)
-        .header("Accept-Language", BROWSER_ACCEPT_LANGUAGE)
+        .header("Accept-Language", browser_info::detect_accept_language())
+        .header("sec-ch-ua", browser_info::build_sec_ch_ua())
+        .header("sec-ch-ua-mobile", "?0")
+        .header("sec-ch-ua-platform", browser_info::platform_hint())
         .header("Referer", format!("{}/app", GEMINI_BASE))
         .header("Origin", GEMINI_BASE)
         .header("Cookie", cookie_header)
@@ -164,6 +168,7 @@ pub async fn discover_email_authuser_mapping(
         .map_err(|e| format!("ListAccounts 请求失败: {}", e))?;
 
     let status = resp.status();
+
     if !status.is_success() {
         return Err(format!("ListAccounts HTTP {}", status.as_u16()));
     }

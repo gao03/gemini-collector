@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::storage;
 use crate::str_err::ToStringErr;
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
@@ -231,7 +232,7 @@ pub fn index_all(
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        if !storage::is_jsonl_file(&path) {
             continue;
         }
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
