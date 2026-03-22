@@ -183,7 +183,7 @@ fn is_media_descriptor(item: &Value) -> bool {
         Some(v) => v,
         None => return false,
     };
-    if type_val != 1 && type_val != 2 && type_val != 4 {
+    if type_val != 1 && type_val != 2 && type_val != 4 && type_val != 16 {
         return false;
     }
     let mut has_url = false;
@@ -529,6 +529,22 @@ pub fn parse_media_item(item: &Value, role: &str) -> MediaFile {
                 }
             }
         }
+        Some(16) => {
+            media.media_type = "attachment".to_string();
+            // 下载 URL 在 [7][1]，不需要缩略图
+            if let Some(urls) = arr.get(7).and_then(|v| v.as_array()) {
+                if urls.len() > 1 {
+                    if let Some(u) = urls[1].as_str() {
+                        media.url = Some(u.to_string());
+                    }
+                }
+                if media.url.is_none() {
+                    if let Some(u) = urls.first().and_then(|v| v.as_str()) {
+                        media.url = Some(u.to_string());
+                    }
+                }
+            }
+        }
         _ => {
             if let Some(u) = arr.get(3).and_then(|v| v.as_str()) {
                 media.url = Some(u.to_string());
@@ -818,13 +834,16 @@ pub fn normalize_turn_media_first_seen(parsed_turns: &mut [ParsedTurn]) {
             }
             turn.user.files = deduped;
         }
-        // assistant files
+        // assistant files: 同时排除已在 user 侧出现过的媒体
+        // （Gemini 会在 AI 的 ai_data[12] 中 stacking 用户上传的附件）
         {
             let mut deduped = Vec::new();
             let mut turn_seen: HashSet<MediaIdentityKey> = HashSet::new();
             for f in &turn.assistant.files {
                 let key = media_identity_key(f);
-                if turn_seen.contains(&key) || seen_assistant.contains(&key) {
+                if turn_seen.contains(&key) || seen_assistant.contains(&key)
+                    || seen_user.contains(&key)
+                {
                     continue;
                 }
                 turn_seen.insert(key.clone());

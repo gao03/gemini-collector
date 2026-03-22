@@ -493,6 +493,7 @@ fn determine_extension(media_type: &str, f_obj: &serde_json::Map<String, serde_j
     let default_ext = match media_type {
         "video" => "mp4",
         "audio" => "mp3",
+        "attachment" => "bin",
         _ => "jpg",
     };
 
@@ -505,6 +506,9 @@ fn determine_extension(media_type: &str, f_obj: &serde_json::Map<String, serde_j
         let known_exts = [
             "jpg", "jpeg", "png", "webp", "gif", "bmp", "mp4", "mov", "webm", "mkv", "mp3",
             "m4a", "wav", "aac", "flac", "ogg",
+            // attachment / document types
+            "md", "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "csv", "json", "xml", "html", "htm", "rtf", "zip", "tar", "gz",
         ];
         if let Some(ext) = Path::new(raw_name)
             .extension()
