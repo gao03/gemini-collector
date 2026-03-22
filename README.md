@@ -4,27 +4,29 @@
 
 # Gemini Collector
 
-**把你的 Gemini 对话与所有 AI 生成内容完整保存到本地**
+**Back up all your Google Gemini conversations & AI-generated media locally**
 
-macOS & Windows 原生应用 · 支持多账号 · 亮色 / 暗色主题
+Native desktop app for macOS & Windows · Multi-account · Light / Dark theme
+
+[**简体中文**](./README.zh-CN.md)
 
 </div>
 
 ---
 
-## 界面预览
+## Screenshots
 
 <div align="center">
 
-| 默认主题 | 夜间主题 |
+| Light theme | Dark theme |
 |:---:|:---:|
 | <img src=".github/images/account-picker-light.png" width="420"/> | <img src=".github/images/account-picker-dark.png" width="420"/> |
 
-| 对话浏览 | 多媒体消息 |
+| Chat view | Media messages |
 |:---:|:---:|
 | <img src=".github/images/chat-main.png" width="420"/> | <img src=".github/images/chat-media.png" width="420"/> |
 
-| 对话导览 | 导出数据 |
+| Conversation list | Export |
 |:---:|:---:|
 | <img src=".github/images/chat-conversation.png" width="420"/> | <img src=".github/images/export-dialog.png" width="420"/> |
 
@@ -32,67 +34,67 @@ macOS & Windows 原生应用 · 支持多账号 · 亮色 / 暗色主题
 
 ---
 
-## 功能特色
+## Features
 
-**零操作，立刻同步**
-- **macOS**：打开 App 即可看到本机 Chrome 已登录的所有 Gemini 账号，一键同步，无需任何配置
-- **Windows**：首次打开时通过内置浏览器登录 Google 账号，登录后自动识别并同步
-- 多账号同时在线，独立管理，增量更新，断点续传
+**Zero-config sync**
+- **macOS**: automatically detects all Gemini accounts signed in to Chrome — one-click sync, no setup needed
+- **Windows**: sign in via the built-in browser on first launch, then sync automatically
+- Multi-account support with independent management, incremental updates, and resumable transfers
 
-**全量内容归档**
-- 同步所有对话文本，完整保留上下文
-- 用户上传的图片、视频一并同步到本地
-- AI 生成的图片、音乐、视频等多媒体内容同步保存，不遗漏任何素材
+**Full content archival**
+- Sync all conversation text with complete context
+- Download user-uploaded images and videos
+- Save AI-generated images, music, videos, and other media — nothing is left behind
 
-**浏览体验**
-- 原生 macOS 界面，支持亮色 / 暗色主题自动切换
-- 对话内容完整渲染：Markdown、代码高亮、数学公式（LaTeX）
-- 时间轴快速跳转，千条对话秒级定位
-- 右键删除单条对话
+**Reading experience**
+- Native UI with automatic light / dark theme switching
+- Full rendering: Markdown, syntax-highlighted code, LaTeX math
+- Timeline navigation for instant access to thousands of conversations
+- Right-click to delete individual conversations
 
-**导出**
-- 支持按时间范围筛选（全部 / 最近 3 天 / 7 天 / 一个月）
-- 导出格式：
-  - 原始数据
+**Export**
+- Filter by time range (all / last 3 days / 7 days / 1 month)
+- Export formats:
+  - Raw data
   - [Kelivo](https://github.com/Chevey339/kelivo)
-  - [Kelivo](https://github.com/Chevey339/kelivo) 分包（将数据拆分为多个小包，解决 iOS 设备单次导入量有限的问题）
-- 导出前预览文件数量与体积
+  - [Kelivo](https://github.com/Chevey339/kelivo) split packages (for iOS devices with limited single-import size)
+- Preview file count and size before exporting
 
 ---
 
-## 安全
+## Security & Privacy
 
-**所有操作均在本地完成，不上传任何数据。**
+**Everything runs locally. No data is ever uploaded.**
 
-- **macOS**：读取本机 Chrome Cookie 完成 Gemini 授权，无需手动登录
-- **Windows**：通过内置 WebView2 浏览器完成 Google 登录，Cookie 仅存储在本地
-- 所有同步内容保存在本地，不经过任何第三方服务器
-- 无需注册账号，无需额外授权
+- **macOS**: reads local Chrome cookies for Gemini authorization — no manual login required
+- **Windows**: Google sign-in via built-in WebView2 browser, cookies stored locally only
+- All synced content stays on your machine — no third-party servers involved
+- No account registration or extra authorization needed
 
 ---
 
-## 安装
+## Install
 
-| 平台 | 状态 | 说明 |
+| Platform | Status | Instructions |
 |:---|:---:|:---|
-| macOS | ✅ 已支持 | 从 [Releases](https://github.com/FirenzeLor/gemini-collector/releases) 下载最新 `.dmg`，拖入 Applications 即可 |
-| Windows | ✅ 已支持 | 从 [Releases](https://github.com/FirenzeLor/gemini-collector/releases) 下载最新安装包，运行安装即可 |
+| macOS | ✅ | Download the latest `.dmg` from [Releases](https://github.com/FirenzeLor/gemini-collector/releases), drag to Applications |
+| Windows | ✅ | Download the latest installer from [Releases](https://github.com/FirenzeLor/gemini-collector/releases) and run it |
 
-> **macOS 首次打开提示"无法验证开发者"**：前往 **系统设置 → 隐私与安全性** 点击"仍要打开"即可。
+> **macOS "unverified developer" warning**: Go to **System Settings → Privacy & Security** and click "Open Anyway".
 >
-> **提示"已损坏"**：在终端执行以下命令后重新打开：
+> **macOS "damaged" warning**: Run the following in Terminal, then reopen:
 > ```bash
 > xattr -cr /Applications/gemini-collector.app
 > ```
 
 ---
 
-## 使用前提
+## Requirements
 
 **macOS**
-- macOS 12 及以上
-- 已安装 Google Chrome，并在 Chrome 中登录了 Gemini（[gemini.google.com](https://gemini.google.com)）
+- macOS 12+
+- Google Chrome installed and signed in to [Gemini](https://gemini.google.com)
 
 **Windows**
-- Windows 10 (1803+) 及以上
-- 首次使用时需在 App 内登录 Google 账号（无需安装 Chrome）
+- Windows 10 (1803+) or later
+- Sign in to Google within the app on first use (Chrome not required)
