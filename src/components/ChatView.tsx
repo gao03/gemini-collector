@@ -844,8 +844,13 @@ function AttachmentStrip({
   alignRight: boolean;
 }) {
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  const [filePreviewIdx, setFilePreviewIdx] = useState<number | null>(null);
   const failedAttachments = attachments.filter((a) => a.downloadFailed);
   const renderableAttachments = attachments.filter((a) => !a.downloadFailed);
+  const fileAttachments = useMemo(
+    () => renderableAttachments.filter((a) => getKind(a.mimeType) === "file"),
+    [renderableAttachments],
+  );
   const mediaAttachmentsBase = useMemo(
     () => dedupeLikelyFormatVariants(renderableAttachments.filter((a) => getKind(a.mimeType) !== "file")),
     [renderableAttachments],
@@ -933,6 +938,41 @@ function AttachmentStrip({
       )}
 
 
+      {/* File attachments */}
+      {fileAttachments.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: alignRight ? "flex-end" : "flex-start", marginBottom: 6 }}>
+          {fileAttachments.map((att, i) => {
+            const ext = att.mediaId.split(".").pop()?.toUpperCase() || "FILE";
+            const displayName = att.mimeType.split("/").pop() || ext;
+            const isTextFile = att.mimeType.startsWith("text/");
+            return (
+              <div
+                key={`file-${i}`}
+                onClick={isTextFile ? () => setFilePreviewIdx(i) : undefined}
+                style={{
+                  width: 160, height: 110, borderRadius: 14, overflow: "hidden", flexShrink: 0,
+                  background: "#1a1a2e", boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                  gap: 6, padding: "8px 10px",
+                  cursor: isTextFile ? "pointer" : "default",
+                }}
+              >
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", textAlign: "center", lineHeight: 1.3, wordBreak: "break-all", maxHeight: 28, overflow: "hidden" }}>
+                  {displayName}
+                </div>
+                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", textTransform: "uppercase" }}>
+                  {ext}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Lightbox */}
       {lightboxIdx !== null && (
         <LightboxModal
@@ -942,6 +982,15 @@ function AttachmentStrip({
           cacheKey={cacheKey}
           onClose={() => setLightboxIdx(null)}
           onChange={setLightboxIdx}
+        />
+      )}
+
+      {/* File preview */}
+      {filePreviewIdx !== null && (
+        <FilePreviewModal
+          attachment={fileAttachments[filePreviewIdx]}
+          mediaDir={mediaDir}
+          onClose={() => setFilePreviewIdx(null)}
         />
       )}
     </>
@@ -1126,6 +1175,99 @@ function VideoThumbnail({ videoUrl }: { videoUrl: string }) {
           <div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.2)", borderTop: "2px solid rgba(255,255,255,0.6)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
         </>
       )}
+    </div>
+  );
+}
+
+const FILE_PREVIEW_MAX_BYTES = 128 * 1024; // 128 KB
+
+function FilePreviewModal({
+  attachment,
+  mediaDir,
+  onClose,
+}: {
+  attachment: Attachment;
+  mediaDir?: string;
+  onClose: () => void;
+}) {
+  const [content, setContent] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  React.useEffect(() => {
+    if (!mediaDir || !attachment.mediaId) return;
+    const url = buildUrl(attachment.mediaId, mediaDir);
+    fetch(url)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const buf = await r.arrayBuffer();
+        const isTruncated = buf.byteLength > FILE_PREVIEW_MAX_BYTES;
+        const slice = isTruncated ? buf.slice(0, FILE_PREVIEW_MAX_BYTES) : buf;
+        const text = new TextDecoder("utf-8", { fatal: false }).decode(slice);
+        setContent(text);
+        setTruncated(isTruncated);
+      })
+      .catch((e) => setError(e.message));
+  }, [attachment.mediaId, mediaDir]);
+
+  // 从原始文件名推断显示名称
+  const origName = attachment.mediaId.includes("-")
+    ? attachment.mimeType.split("/").pop() || attachment.mediaId
+    : attachment.mediaId;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center" }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: "relative", width: "80vw", maxWidth: 800, maxHeight: "85vh",
+          background: "#1e1e2e", borderRadius: 12, display: "flex", flexDirection: "column", overflow: "hidden",
+        }}
+      >
+        {/* Header */}
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+          <span style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", fontWeight: 500 }}>{origName}</span>
+          <button
+            onClick={onClose}
+            style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+          >×</button>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflow: "auto", padding: "16px 20px" }}>
+          {error ? (
+            <div style={{ color: "#f87171", fontSize: 13 }}>读取失败: {error}</div>
+          ) : content === null ? (
+            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 13 }}>加载中...</div>
+          ) : (
+            <>
+              <pre style={{
+                margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                fontSize: 12, lineHeight: 1.6, color: "rgba(255,255,255,0.82)",
+                fontFamily: "ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Code', monospace",
+              }}>
+                {content}
+              </pre>
+              {truncated && (
+                <div style={{ marginTop: 12, padding: "8px 0", borderTop: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", fontSize: 11, textAlign: "center" }}>
+                  文件内容过长，仅展示前 128 KB
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
