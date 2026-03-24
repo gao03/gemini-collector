@@ -12,6 +12,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Attachment, Conversation, ConvMessage } from "../data/types";
 import { useTheme } from "../theme";
+import { CopyIcon, CheckIcon } from "./Icons";
 
 const loadedImageUrlCache = new Set<string>();
 
@@ -1402,6 +1403,7 @@ function MessageBubble({
   isHighlighted?: boolean;
 }) {
   const t = useTheme();
+  const [copiedId, setCopiedId] = useState(false);
   const isUser = message.role === "user";
   const hasText = (message.text || "").trim().length > 0;
   const attachmentsBlock = message.attachments.length > 0 ? (
@@ -1412,6 +1414,24 @@ function MessageBubble({
       alignRight={isUser}
     />
   ) : null;
+
+  const copyIdBtnColor = t.isDark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.18)";
+  const copyIdBtn = (
+    <button
+      onClick={() => {
+        void navigator.clipboard.writeText(message.id).then(() => {
+          setCopiedId(true);
+          setTimeout(() => setCopiedId(false), 850);
+        });
+      }}
+      title={copiedId ? "已复制" : "复制消息 ID"}
+      style={{ width: 14, height: 14, borderRadius: 4, border: "none", background: "transparent", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, padding: 0, transition: "background 0.15s", opacity: 0.7 }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = t.btnHoverBg; (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.opacity = "0.7"; }}
+    >
+      {copiedId ? <CheckIcon color="#16a34a" /> : <CopyIcon color={copyIdBtnColor} />}
+    </button>
+  );
 
   return (
     <div style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start", padding: "4px 26px 4px 20px", gap: 8 }}>
@@ -1484,11 +1504,13 @@ function MessageBubble({
         )}
         {!isUser && attachmentsBlock}
         <div style={{ fontSize: 11, color: t.textMuted, marginTop: hasText ? 3 : 1, textAlign: isUser ? "right" : "left", padding: "0 4px", display: "flex", gap: 4, justifyContent: isUser ? "flex-end" : "flex-start", alignItems: "center", flexWrap: "wrap" }}>
+          {isUser && copyIdBtn}
           <span>{formatMsgDate(message.timestamp)} {formatMsgTime(message.timestamp)}</span>
           {!isUser && (
             <>
               <span style={{ opacity: 0.4 }}>·</span>
               <span style={{ color: t.textSub }}>{message.genMeta?.model || message.model || "未知模型"}</span>
+              {copyIdBtn}
               {message.attachments.length > 0 && (() => {
                 const atts = message.attachments;
                 // 音乐文件：Gemini 对音乐同时输出一个 video/* (封面合并版) 和一个 audio/*，

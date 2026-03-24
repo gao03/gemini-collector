@@ -5,7 +5,7 @@ import { useTheme } from "../theme";
 import { TOP_BAR_HEIGHT } from "../utils/platform";
 import { formatDateTime } from "../utils/dateTime";
 import { hoverHandlers } from "../utils/hoverHandlers";
-import { SidebarIcon, MoonIcon, SunIcon, ExternalLinkIcon, LogoutIcon } from "./Icons";
+import { SidebarIcon, MoonIcon, SunIcon, ExternalLinkIcon, LogoutIcon, TrashIcon } from "./Icons";
 
 interface TopBarProps {
   selectedConversation: Conversation | null;
@@ -17,6 +17,7 @@ interface TopBarProps {
   disableLogout?: boolean;
   onLogout: () => void;
   authuser?: string | null;
+  onClearConversation?: () => void;
 }
 
 export function TopBar({
@@ -25,7 +26,7 @@ export function TopBar({
   sidebarCollapsed,
   onToggleSidebar,
   isDark, onToggleDark, disableLogout = false, onLogout,
-  authuser = null,
+  authuser = null, onClearConversation,
 }: TopBarProps) {
   const t = useTheme();
   const imageCount = Math.max(0, selectedSummary?.imageCount ?? 0);
@@ -114,6 +115,17 @@ export function TopBar({
 
       {/* Right: open in browser + dark mode toggle + logout */}
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+        {/* Clear current conversation detail */}
+        {selectedConversation && (
+          <button
+            onClick={() => onClearConversation?.()}
+            title="清除当前对话内容"
+            style={iconBtn(t.btnHoverBg)}
+            {...hoverHandlers(t.btnHoverBg)}
+          >
+            <TrashIcon color={t.textSub} />
+          </button>
+        )}
         {/* Open in Gemini */}
         {selectedConversation && (
           <button

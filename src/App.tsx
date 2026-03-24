@@ -1094,6 +1094,7 @@ function App() {
               setScreen("account-picker");
             }}
             authuser={currentAccount.authuser}
+            onClearConversation={() => setSelectedConversation(null)}
           />
           <ChatView conversation={selectedConversation} mediaDir={mediaDir} mediaVersion={mediaVersion} scrollToMessageId={scrollToMessageId} onScrolledToMessage={handleScrolledToMessage} />
         </div>
