@@ -1,6 +1,9 @@
 name: Build Release
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -114,14 +117,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ inputs.version }}"
-          TAG="v${VERSION}"
-
-          # 创建 tag
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release ${VERSION}"
-          git push origin "${TAG}"
+          # 从 tag 或 input 获取版本号
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="${{ inputs.version }}"
+            TAG="v${VERSION}"
+            # 创建 tag（仅在手动触发时）
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" -m "Release ${VERSION}"
+            git push origin "${TAG}"
+          fi
 
           # 创建 Release
           gh release create "${TAG}" \
