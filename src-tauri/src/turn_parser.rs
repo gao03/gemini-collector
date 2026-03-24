@@ -67,7 +67,6 @@ pub struct DeepResearchPlan {
     pub steps: String,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleContent {
     pub text: String,
@@ -541,8 +540,8 @@ fn remove_placeholder_links(text: &str) -> String {
     let filtered_lines: Vec<&str> = lines
         .into_iter()
         .filter(|line| {
-            !line.contains("googleusercontent.com/immersive_entry_chip") &&
-            !line.contains("googleusercontent.com/deep_research_confirmation_content")
+            !line.contains("googleusercontent.com/immersive_entry_chip")
+                && !line.contains("googleusercontent.com/deep_research_confirmation_content")
         })
         .collect();
 
@@ -652,7 +651,8 @@ fn extract_deep_research_plan(ai_data: &Value) -> Option<DeepResearchPlan> {
                     if step_data.len() >= 2 {
                         // step_data[0] 是步骤标题，step_data[1] 是详细内容
                         if let (Some(step_title), Some(step_detail)) =
-                            (step_data[0].as_str(), step_data[1].as_str()) {
+                            (step_data[0].as_str(), step_data[1].as_str())
+                        {
                             if !steps_text.is_empty() {
                                 steps_text.push_str("\n\n");
                             }
@@ -810,10 +810,17 @@ pub fn parse_media_item(item: &Value, role: &str) -> MediaFile {
 /// 解析单个对话轮次
 pub fn parse_turn(turn: &Value) -> ParsedTurn {
     // 提取 turn_id 用于日志
-    let turn_id_for_log = turn.as_array()
+    let turn_id_for_log = turn
+        .as_array()
         .and_then(|arr| arr.first())
         .and_then(|v| v.as_array())
-        .and_then(|ids| if ids.len() > 1 { ids[1].as_str() } else { ids.first().and_then(|v| v.as_str()) })
+        .and_then(|ids| {
+            if ids.len() > 1 {
+                ids[1].as_str()
+            } else {
+                ids.first().and_then(|v| v.as_str())
+            }
+        })
         .unwrap_or("unknown");
 
     let mut result = ParsedTurn {
@@ -903,11 +910,19 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
     // select AI candidate
     let mut ai_data: Option<&Value> = None;
     let selected_candidate_id = detail_arr.get(3).and_then(|v| v.as_str());
-    log::info!("🔍 parse_turn [{}]: selected_candidate_id={:?}", turn_id_for_log, selected_candidate_id);
+    log::info!(
+        "🔍 parse_turn [{}]: selected_candidate_id={:?}",
+        turn_id_for_log,
+        selected_candidate_id
+    );
 
     if let Some(candidates_arr) = detail_arr.first().and_then(|v| v.as_array()) {
         let candidates: Vec<&Value> = candidates_arr.iter().filter(|c| c.is_array()).collect();
-        log::info!("🔍 parse_turn [{}]: 找到 {} 个候选响应", turn_id_for_log, candidates.len());
+        log::info!(
+            "🔍 parse_turn [{}]: 找到 {} 个候选响应",
+            turn_id_for_log,
+            candidates.len()
+        );
 
         if let Some(sel_id) = selected_candidate_id {
             for c in &candidates {
@@ -922,7 +937,12 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         }
 
         if let Some(ai) = ai_data {
-            log::info!("🔍 parse_turn [{}]: 选中的 ai_data 是数组={}, 长度={}", turn_id_for_log, ai.is_array(), vlen(ai));
+            log::info!(
+                "🔍 parse_turn [{}]: 选中的 ai_data 是数组={}, 长度={}",
+                turn_id_for_log,
+                ai.is_array(),
+                vlen(ai)
+            );
         } else {
             log::warn!("🔍 parse_turn [{}]: 没有找到 ai_data", turn_id_for_log);
         }
@@ -1033,7 +1053,6 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
             result.assistant.deep_research_plan = Some(plan);
         }
     }
-
 
     log::info!(
         "🔍 parse_turn: 返回结果，deep_research_articles 数量={}",

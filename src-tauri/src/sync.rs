@@ -686,7 +686,6 @@ impl GeminiExporter {
         }
         log::info!("  获取到 {} 个 raw_turns", raw_turns.len());
 
-
         if cancel.is_cancelled() {
             return Err("用户取消单会话同步".to_string());
         }

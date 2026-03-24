@@ -1508,7 +1508,7 @@ function MessageBubble({
         )}
         {!isUser && message.deep_research_articles && message.deep_research_articles.length > 0 && (
           <>
-            {message.deep_research_articles.map((article, idx) => (
+            {message.deep_research_articles.map((article) => (
               <div key={article.uuid} style={{
                 marginTop: 12,
                 padding: "12px 16px",

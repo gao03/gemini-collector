@@ -671,7 +671,9 @@ pub fn turns_to_jsonl_rows(
             }
         }
         if let Some(deep_research_articles) = asst.and_then(|a| a.get("deep_research_articles")) {
-            if deep_research_articles.is_array() && !deep_research_articles.as_array().unwrap().is_empty() {
+            if deep_research_articles.is_array()
+                && !deep_research_articles.as_array().unwrap().is_empty()
+            {
                 model_row["deep_research_articles"] = deep_research_articles.clone();
             }
         }
