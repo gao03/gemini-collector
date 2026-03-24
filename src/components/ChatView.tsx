@@ -1016,13 +1016,14 @@ function AttachmentStrip({
         document.body,
       )}
 
-      {/* File preview */}
-      {filePreviewIdx !== null && (
+      {/* File preview — portal 到 body 避免父级 transform/filter 影响 fixed 定位 */}
+      {filePreviewIdx !== null && ReactDOM.createPortal(
         <FilePreviewModal
           attachment={fileAttachments[filePreviewIdx]}
           mediaDir={mediaDir}
           onClose={() => setFilePreviewIdx(null)}
-        />
+        />,
+        document.body,
       )}
     </>
   );
