@@ -26,6 +26,7 @@ dist-ssr
 docs/
 
 # Test data & sensitive user data
+.env.test
 test_data/
 src/data/*.json
 scripts/__pycache__/

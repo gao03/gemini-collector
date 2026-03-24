@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect } from "react";
+import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -14,9 +15,10 @@ import { useTheme } from "../theme";
 
 const loadedImageUrlCache = new Set<string>();
 
-function getKind(mimeType: string): "image" | "video" | "file" {
+function getKind(mimeType: string): "image" | "video" | "audio" | "file" {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
   return "file";
 }
 
@@ -847,13 +849,24 @@ function AttachmentStrip({
   const [filePreviewIdx, setFilePreviewIdx] = useState<number | null>(null);
   const failedAttachments = attachments.filter((a) => a.downloadFailed);
   const renderableAttachments = attachments.filter((a) => !a.downloadFailed);
+  // 音乐对检测：Gemini 对音乐同时输出一个 video/*（封面合并版）和一个 audio/*，
+  // 实际代表同一首音乐，只显示视频封面（带播放按钮），隐藏重复的音频文件卡片。
+  const isMusicPair = renderableAttachments.length === 2
+    && renderableAttachments.some((a) => a.mimeType.startsWith("video/"))
+    && renderableAttachments.some((a) => a.mimeType.startsWith("audio/"));
   const fileAttachments = useMemo(
-    () => renderableAttachments.filter((a) => getKind(a.mimeType) === "file"),
-    [renderableAttachments],
+    () => isMusicPair
+      ? []
+      : renderableAttachments.filter((a) => getKind(a.mimeType) === "file"),
+    [renderableAttachments, isMusicPair],
   );
   const mediaAttachmentsBase = useMemo(
-    () => dedupeLikelyFormatVariants(renderableAttachments.filter((a) => getKind(a.mimeType) !== "file")),
-    [renderableAttachments],
+    () => dedupeLikelyFormatVariants(
+      isMusicPair
+        ? renderableAttachments.filter((a) => a.mimeType.startsWith("video/"))
+        : renderableAttachments.filter((a) => getKind(a.mimeType) !== "file"),
+    ),
+    [renderableAttachments, isMusicPair],
   );
   const mediaKey = useMemo(
     () => mediaAttachmentsBase.map((a) => `${a.mediaId}:${a.mimeType}`).join("|"),
@@ -910,14 +923,31 @@ function AttachmentStrip({
           {mediaAttachments.map((att, i) => {
             const url = buildUrl(att.mediaId, mediaDir, cacheKey);
             const kind = getKind(att.mimeType);
-            return kind === "image" ? (
+            if (kind === "image") return (
               <ImageThumbnail
                 key={i}
                 url={url}
                 alt={att.mediaId}
                 onClick={() => setLightboxIdx(i)}
               />
-            ) : (
+            );
+            if (kind === "audio") return (
+              <div
+                key={i}
+                onClick={() => setLightboxIdx(i)}
+                style={{ width: 160, height: 110, borderRadius: 14, overflow: "hidden", cursor: "pointer", flexShrink: 0, background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)", boxShadow: "0 2px 8px rgba(0,0,0,0.3)", position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}
+              >
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 18V5l12-2v13" />
+                  <circle cx="6" cy="18" r="3" />
+                  <circle cx="18" cy="16" r="3" />
+                </svg>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", maxWidth: 140, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "0 8px" }}>
+                  {att.mediaId}
+                </div>
+              </div>
+            );
+            return (
               <div
                 key={i}
                 onClick={() => setLightboxIdx(i)}
@@ -973,8 +1003,8 @@ function AttachmentStrip({
         </div>
       )}
 
-      {/* Lightbox */}
-      {lightboxIdx !== null && (
+      {/* Lightbox — portal 到 body 避免父级 transform/filter 影响 fixed 定位 */}
+      {lightboxIdx !== null && ReactDOM.createPortal(
         <LightboxModal
           attachments={mediaAttachments}
           index={lightboxIdx}
@@ -982,7 +1012,8 @@ function AttachmentStrip({
           cacheKey={cacheKey}
           onClose={() => setLightboxIdx(null)}
           onChange={setLightboxIdx}
-        />
+        />,
+        document.body,
       )}
 
       {/* File preview */}
@@ -1313,6 +1344,18 @@ function LightboxModal({
             alt={att.mediaId}
             style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 12, objectFit: "contain", display: "block" }}
           />
+        ) : kind === "audio" ? (
+          <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 12, padding: "32px 40px", display: "flex", flexDirection: "column", alignItems: "center", gap: 16, minWidth: 320 }}>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18V5l12-2v13" />
+              <circle cx="6" cy="18" r="3" />
+              <circle cx="18" cy="16" r="3" />
+            </svg>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, maxWidth: 280, textAlign: "center", wordBreak: "break-all" }}>
+              {att.mediaId}
+            </div>
+            <audio src={url} controls autoPlay style={{ width: "100%" }} />
+          </div>
         ) : (
           <video
             src={url}
@@ -1449,7 +1492,7 @@ function MessageBubble({
           {!isUser && (
             <>
               <span style={{ opacity: 0.4 }}>·</span>
-              <span style={{ color: t.textSub }}>{message.model || "未知模型"}</span>
+              <span style={{ color: t.textSub }}>{message.genMeta?.model || message.model || "未知模型"}</span>
               {message.attachments.length > 0 && (() => {
                 const atts = message.attachments;
                 // 音乐文件：Gemini 对音乐同时输出一个 video/* (封面合并版) 和一个 audio/*，

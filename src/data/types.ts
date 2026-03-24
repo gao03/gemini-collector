@@ -18,6 +18,7 @@ export interface ConvMessage {
   timestamp: string;   // ISO 8601
   model?: string;      // only when role=="model"
   thinking?: string;   // only when role=="model" and thinking exists
+  genMeta?: { model?: string; prompt?: string };  // AI generated media meta
   hidden?: boolean;    // action_card messages marked by backend
 }
 

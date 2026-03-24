@@ -353,10 +353,27 @@ fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta
         None => return (files, music_meta, gen_meta),
     };
     let block = &block12_arr[last_idx];
+
+    // block 可能是 Array（旧格式）或 Object（新格式，如 {"87": [...], "60": [...]}）
+    // 新格式：音乐数据在 key "87"，视频生成在 key "60"
+    if let Some(obj) = block.as_object() {
+        // Object 格式：检查 "87" (music) 或 "60" (video gen)
+        if let Some(music_data) = obj.get("87") {
+            if let Some(music_arr) = music_data.as_array() {
+                extract_music_from_slots(music_arr, &mut files, &mut music_meta);
+            }
+        }
+        if let Some(video_data) = obj.get("60") {
+            extract_gen_video_from_value(video_data, &mut files, &mut gen_meta);
+        }
+        return (files, music_meta, gen_meta);
+    }
+
     if !block.is_array() || vlen(block) == 0 {
         return (files, music_meta, gen_meta);
     }
 
+    // Array 格式（旧格式）
     // 检测音乐块: block[6] 存在且 block[6..] 的 JSON 含 "music_gen"
     let is_music = vlen(block) > 6
         && block[6].is_array()
@@ -369,55 +386,79 @@ fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta
         };
 
     if is_music {
-        for slot_idx in [0, 1] {
-            if let Some(slot) = vget(block, slot_idx) {
-                if slot.is_array() {
-                    if let Some(media_item) = vget(slot, 1) {
-                        if media_item.is_array() {
-                            files.push(parse_media_item(media_item, "assistant"));
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(meta) = vget(block, 2) {
-            if meta.is_array() {
-                let title = vstr(meta, 0).map(|s| s.to_string());
-                let album = vstr(meta, 2).map(|s| s.to_string());
-                let genre = vstr(meta, 4).map(|s| s.to_string());
-                let moods = varr(meta, 5)
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                    .unwrap_or_default();
-                music_meta = Some(MusicMeta {
-                    title,
-                    album,
-                    genre,
-                    moods,
-                    caption: None,
-                });
-            }
-        }
-        if let Some(b3) = vget(block, 3) {
-            if b3.is_array() && vlen(b3) > 3 {
-                if let Some(caption) = vstr(b3, 3) {
-                    if let Some(ref mut mm) = music_meta {
-                        mm.caption = Some(caption.to_string());
-                    } else {
-                        music_meta = Some(MusicMeta {
-                            title: None,
-                            album: None,
-                            genre: None,
-                            moods: Vec::new(),
-                            caption: Some(caption.to_string()),
-                        });
-                    }
-                }
-            }
+        if let Some(arr) = block.as_array() {
+            extract_music_from_slots(arr, &mut files, &mut music_meta);
         }
         return (files, music_meta, gen_meta);
     }
 
     // 检测视频生成块
+    extract_gen_video_from_value(block, &mut files, &mut gen_meta);
+
+    (files, music_meta, gen_meta)
+}
+
+/// 从音乐 slots 数组中提取媒体文件和 music_meta。
+/// slots 结构: [slot0(mp3), slot1(mp4+vtt+lyrics), meta, caption_block, ...]
+fn extract_music_from_slots(
+    slots: &[Value],
+    files: &mut Vec<MediaFile>,
+    music_meta: &mut Option<MusicMeta>,
+) {
+    // 提取媒体文件（slot 0 = mp3, slot 1 = mp4）
+    for slot in slots.iter().take(2) {
+        if slot.is_array() {
+            if let Some(media_item) = vget(slot, 1) {
+                if media_item.is_array() {
+                    files.push(parse_media_item(media_item, "assistant"));
+                }
+            }
+        }
+    }
+    // music meta (slot 2)
+    if let Some(meta) = slots.get(2) {
+        if meta.is_array() {
+            let title = vstr(meta, 0).map(|s| s.to_string());
+            let album = vstr(meta, 2).map(|s| s.to_string());
+            let genre = vstr(meta, 4).map(|s| s.to_string());
+            let moods = varr(meta, 5)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            *music_meta = Some(MusicMeta {
+                title,
+                album,
+                genre,
+                moods,
+                caption: None,
+            });
+        }
+    }
+    // caption (slot 3)
+    if let Some(b3) = slots.get(3) {
+        if b3.is_array() && vlen(b3) > 3 {
+            if let Some(caption) = vstr(b3, 3) {
+                if let Some(ref mut mm) = music_meta {
+                    mm.caption = Some(caption.to_string());
+                } else {
+                    *music_meta = Some(MusicMeta {
+                        title: None,
+                        album: None,
+                        genre: None,
+                        moods: Vec::new(),
+                        caption: Some(caption.to_string()),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// 从视频生成块中提取媒体文件和 gen_meta。
+fn extract_gen_video_from_value(
+    block: &Value,
+    files: &mut Vec<MediaFile>,
+    gen_meta: &mut Option<GenMeta>,
+) {
     if let Some(inner) = vget(block, 0) {
         if inner.is_array() && vlen(inner) > 0 {
             if let Some(group) = vget(inner, 0) {
@@ -436,16 +477,18 @@ fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta
                             let prompt = vstr(gen_info, 0).map(|s| s.to_string());
                             let model = vget(gen_info, 2)
                                 .and_then(|v| vstr(v, 2))
-                                .map(|s| s.to_string());
-                            gen_meta = Some(GenMeta { model, prompt });
+                                .map(|s| {
+                                    // "models/veo-3.1-fast-generate-002;backend_beyond" → "veo-3.1-fast-generate-002"
+                                    let s = s.strip_prefix("models/").unwrap_or(s);
+                                    s.split(';').next().unwrap_or(s).to_string()
+                                });
+                            *gen_meta = Some(GenMeta { model, prompt });
                         }
                     }
                 }
             }
         }
     }
-
-    (files, music_meta, gen_meta)
 }
 
 // ============================================================================
