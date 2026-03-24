@@ -174,11 +174,6 @@ function fixMarkdown(content: string): string {
   // 4. Restore code blocks
   text = text.replace(/\x00C(\d+)\x00/g, (_, i) => codeSlots[parseInt(i)]);
 
-  // 5. CJK fix — insert ZWS between non-ASCII chars and * markers
-  text = text
-    .replace(/([^\x00-\x7F])(\*+)/g, "$1\u200B$2")
-    .replace(/(\*+)([^\x00-\x7F])/g, "$1\u200B$2");
-
   return text;
 }
 
