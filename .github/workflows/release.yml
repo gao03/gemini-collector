@@ -73,19 +73,26 @@ jobs:
       - name: 打包产物 (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          cd src-tauri/target/${{ matrix.target }}/release
-          if [ -f gemini-collector ]; then
-            tar -czf ${{ matrix.artifact_name }}.tar.gz gemini-collector
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
+          if [ -d "gemini-collector.app" ]; then
+            # 打包 .app bundle
+            tar -czf ${{ matrix.artifact_name }}.tar.gz gemini-collector.app
             mv ${{ matrix.artifact_name }}.tar.gz $GITHUB_WORKSPACE/
+          else
+            echo "错误: 找不到 gemini-collector.app"
+            exit 1
           fi
 
       - name: 打包产物 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          cd src-tauri/target/${{ matrix.target }}/release
-          if (Test-Path gemini-collector.exe) {
-            Compress-Archive -Path gemini-collector.exe -DestinationPath ${{ matrix.artifact_name }}.zip
-            Move-Item ${{ matrix.artifact_name }}.zip $env:GITHUB_WORKSPACE/
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/msi
+          $msiFile = Get-ChildItem -Filter "*.msi" | Select-Object -First 1
+          if ($msiFile) {
+            Compress-Archive -Path $msiFile.FullName -DestinationPath "$env:GITHUB_WORKSPACE/${{ matrix.artifact_name }}.zip"
+          } else {
+            Write-Error "错误: 找不到 .msi 文件"
+            exit 1
           }
 
       - name: 上传构建产物
