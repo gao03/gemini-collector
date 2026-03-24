@@ -218,10 +218,7 @@ pub fn load_media_manifest(dir: &Path) -> HashMap<String, String> {
 pub fn save_media_manifest(dir: &Path, url_to_name: &HashMap<String, String>) -> Result<()> {
     let manifest_file = dir.join("media_manifest.json");
     let data = json!({ "url_to_name": url_to_name });
-    std::fs::write(
-        &manifest_file,
-        serde_json::to_string_pretty(&data)?,
-    )?;
+    std::fs::write(&manifest_file, serde_json::to_string_pretty(&data)?)?;
     Ok(())
 }
 
@@ -229,7 +226,9 @@ pub fn build_media_id_to_url_map(account_dir: &Path) -> HashMap<String, String> 
     let url_to_name = load_media_manifest(account_dir);
     let mut media_to_url = HashMap::new();
     for (url, media_name) in &url_to_name {
-        media_to_url.entry(media_name.clone()).or_insert_with(|| url.clone());
+        media_to_url
+            .entry(media_name.clone())
+            .or_insert_with(|| url.clone());
     }
     media_to_url
 }
@@ -465,7 +464,11 @@ pub fn count_media_types_from_rows(rows: &[Value]) -> (usize, usize, usize) {
             None => continue,
         };
         for att in attachments {
-            if let Some(mime) = att.as_object().and_then(|o| o.get("mimeType")).and_then(|v| v.as_str()) {
+            if let Some(mime) = att
+                .as_object()
+                .and_then(|o| o.get("mimeType"))
+                .and_then(|v| v.as_str())
+            {
                 let lower = mime.to_lowercase();
                 if lower.starts_with("image/") {
                     images += 1;
@@ -649,7 +652,10 @@ pub fn turns_to_jsonl_rows(
             "model": model,
         });
 
-        if let Some(thinking) = asst.and_then(|a| a.get("thinking")).and_then(|v| v.as_str()) {
+        if let Some(thinking) = asst
+            .and_then(|a| a.get("thinking"))
+            .and_then(|v| v.as_str())
+        {
             if !thinking.is_empty() {
                 model_row["thinking"] = json!(thinking);
             }
@@ -662,6 +668,16 @@ pub fn turns_to_jsonl_rows(
         if let Some(gen_meta) = asst.and_then(|a| a.get("gen_meta")) {
             if !gen_meta.is_null() {
                 model_row["genMeta"] = gen_meta.clone();
+            }
+        }
+        if let Some(deep_research_articles) = asst.and_then(|a| a.get("deep_research_articles")) {
+            if deep_research_articles.is_array() && !deep_research_articles.as_array().unwrap().is_empty() {
+                model_row["deep_research_articles"] = deep_research_articles.clone();
+            }
+        }
+        if let Some(deep_research_plan) = asst.and_then(|a| a.get("deep_research_plan")) {
+            if !deep_research_plan.is_null() {
+                model_row["deep_research_plan"] = deep_research_plan.clone();
             }
         }
         rows.push(model_row);
@@ -730,10 +746,7 @@ fn build_attachments(files: Option<&Value>) -> Vec<Value> {
         .filter_map(|f| {
             let obj = f.as_object()?;
             let media_id = obj.get("media_id")?.as_str().filter(|s| !s.is_empty())?;
-            let mime = obj
-                .get("mime")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let mime = obj.get("mime").and_then(|v| v.as_str()).unwrap_or("");
             let mut item = json!({ "mediaId": media_id, "mimeType": mime });
             if let Some(preview_id) = obj.get("preview_media_id").and_then(|v| v.as_str()) {
                 if !preview_id.is_empty() {
@@ -894,7 +907,11 @@ pub fn load_conversations_index(account_dir: &Path) -> (Vec<String>, HashMap<Str
     let mut ordered_ids = Vec::new();
     let mut index_map = HashMap::new();
     for item in items {
-        if let Some(cid) = item.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(cid) = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             ordered_ids.push(cid.to_string());
             index_map.insert(cid.to_string(), item.clone());
         }
@@ -936,10 +953,7 @@ fn get_int_field(obj: &Value, key: &str, default: i64) -> i64 {
 pub fn build_lost_summary(bare_id: &str, existing: Option<&Value>) -> Value {
     let empty = json!({});
     let e = existing.unwrap_or(&empty);
-    let last_message = e
-        .get("lastMessage")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let last_message = e.get("lastMessage").and_then(|v| v.as_str()).unwrap_or("");
     let message_count = get_int_field(e, "messageCount", 0);
     let image_count = get_int_field(e, "imageCount", 0);
     let video_count = get_int_field(e, "videoCount", 0);
@@ -963,9 +977,8 @@ pub fn build_summary_from_chat_listing(chat: &Value, existing: Option<&Value>) -
     let empty = json!({});
     let e = existing.unwrap_or(&empty);
     let status = status_for_remote_summary(existing);
-    let bare_id = crate::protocol::strip_c_prefix(
-        chat.get("id").and_then(|v| v.as_str()).unwrap_or(""),
-    );
+    let bare_id =
+        crate::protocol::strip_c_prefix(chat.get("id").and_then(|v| v.as_str()).unwrap_or(""));
     let title = chat
         .get("title")
         .and_then(|v| v.as_str())
@@ -977,8 +990,12 @@ pub fn build_summary_from_chat_listing(chat: &Value, existing: Option<&Value>) -
     {
         Some(ts) => (to_iso_utc(Some(ts)), Some(ts.to_string())),
         None => (
-            e.get("updatedAt").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            e.get("remoteHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            e.get("updatedAt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            e.get("remoteHash")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         ),
     };
 
@@ -1004,7 +1021,11 @@ pub fn build_summary_from_chat_listing(chat: &Value, existing: Option<&Value>) -
 pub fn filter_display_rows(msg_rows: &[Value]) -> Vec<Value> {
     let mut to_remove = HashSet::new();
     for (i, row) in msg_rows.iter().enumerate() {
-        let text = match row.as_object().and_then(|o| o.get("text")).and_then(|v| v.as_str()) {
+        let text = match row
+            .as_object()
+            .and_then(|o| o.get("text"))
+            .and_then(|v| v.as_str())
+        {
             Some(t) => t,
             None => continue,
         };

@@ -50,6 +50,24 @@ pub struct GenMeta {
     pub prompt: Option<String>,
 }
 
+/// 深度研究文章条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepResearchArticle {
+    pub composite_id: String,
+    pub uuid: String,
+    pub title: String,
+    pub doc_uuid: String,
+    pub article_markdown: String,
+}
+
+/// 深度研究方案
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepResearchPlan {
+    pub title: String,
+    pub steps: String,
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleContent {
     pub text: String,
@@ -64,6 +82,8 @@ pub struct AssistantContent {
     pub files: Vec<MediaFile>,
     pub music_meta: Option<MusicMeta>,
     pub gen_meta: Option<GenMeta>,
+    pub deep_research_plan: Option<DeepResearchPlan>,
+    pub deep_research_articles: Vec<DeepResearchArticle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +134,11 @@ fn url_extract_re() -> &'static Regex {
 }
 
 fn is_internal_placeholder_content_url(url_text: &str) -> bool {
-    let candidate = url_text.trim().trim_end_matches(&['。', '.', ',', ';', '，', '；', '）', ')', ']', '}', '"', '\''][..]);
+    let candidate = url_text.trim().trim_end_matches(
+        &[
+            '。', '.', ',', ';', '，', '；', '）', ')', ']', '}', '"', '\'',
+        ][..],
+    );
     if !candidate.starts_with("https://") && !candidate.starts_with("http://") {
         return false;
     }
@@ -212,9 +236,7 @@ fn is_media_descriptor(item: &Value) -> bool {
 }
 
 fn media_descriptor_size_hint(item: &Value) -> i64 {
-    vget(item, 15)
-        .and_then(|v| vi64(v, 2))
-        .unwrap_or(0)
+    vget(item, 15).and_then(|v| vi64(v, 2)).unwrap_or(0)
 }
 
 fn pick_preferred_media_descriptor(items: &[&Value]) -> Option<usize> {
@@ -332,7 +354,9 @@ fn extract_ai_media_items(ai_data: &Value) -> Vec<&Value> {
 }
 
 /// 从 ai_data[12] 提取 AI 生成的音乐/视频媒体
-fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta>, Option<GenMeta>) {
+fn extract_generated_media(
+    ai_data: &Value,
+) -> (Vec<MediaFile>, Option<MusicMeta>, Option<GenMeta>) {
     let mut files = Vec::new();
     let mut music_meta: Option<MusicMeta> = None;
     let mut gen_meta: Option<GenMeta> = None;
@@ -358,15 +382,13 @@ fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta
     }
 
     // 检测音乐块: block[6] 存在且 block[6..] 的 JSON 含 "music_gen"
-    let is_music = vlen(block) > 6
-        && block[6].is_array()
-        && {
-            let tail_json = block.as_array().unwrap()[6..]
-                .iter()
-                .filter_map(|v| serde_json::to_string(v).ok())
-                .collect::<String>();
-            tail_json.contains("music_gen")
-        };
+    let is_music = vlen(block) > 6 && block[6].is_array() && {
+        let tail_json = block.as_array().unwrap()[6..]
+            .iter()
+            .filter_map(|v| serde_json::to_string(v).ok())
+            .collect::<String>();
+        tail_json.contains("music_gen")
+    };
 
     if is_music {
         for slot_idx in [0, 1] {
@@ -386,7 +408,11 @@ fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta
                 let album = vstr(meta, 2).map(|s| s.to_string());
                 let genre = vstr(meta, 4).map(|s| s.to_string());
                 let moods = varr(meta, 5)
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 music_meta = Some(MusicMeta {
                     title,
@@ -446,6 +472,206 @@ fn extract_generated_media(ai_data: &Value) -> (Vec<MediaFile>, Option<MusicMeta
     }
 
     (files, music_meta, gen_meta)
+}
+
+/// 从 ai_data 中提取深度研究文章（来自 ai_data[30]）
+fn extract_deep_research_articles(ai_data: &Value) -> Vec<DeepResearchArticle> {
+    let mut articles = Vec::new();
+
+    if !ai_data.is_array() || vlen(ai_data) <= 30 {
+        return articles;
+    }
+
+    // ai_data[30] 是深度研究文章列表
+    let entries = match vget(ai_data, 30) {
+        Some(v) if v.is_array() => v.as_array().unwrap(),
+        _ => return articles,
+    };
+
+    for entry in entries.iter() {
+        let entry_arr = match entry.as_array() {
+            Some(a) if a.len() >= 5 => a,
+            _ => continue,
+        };
+
+        // entry[0]: composite_id
+        // entry[1]: uuid
+        // entry[2]: title
+        // entry[3]: doc_uuid
+        // entry[4]: article_markdown
+        let composite_id = match entry_arr[0].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let uuid = match entry_arr[1].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let title = match entry_arr[2].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let doc_uuid = match entry_arr[3].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let article_markdown = match entry_arr[4].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        articles.push(DeepResearchArticle {
+            composite_id,
+            uuid,
+            title,
+            doc_uuid,
+            article_markdown: remove_placeholder_links(&article_markdown),
+        });
+    }
+
+    articles
+}
+
+/// 清理文本中的 Google 占位符链接
+fn remove_placeholder_links(text: &str) -> String {
+    let result = text.to_string();
+
+    // 移除包含占位符链接的整行
+    let lines: Vec<&str> = result.lines().collect();
+    let filtered_lines: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| {
+            !line.contains("googleusercontent.com/immersive_entry_chip") &&
+            !line.contains("googleusercontent.com/deep_research_confirmation_content")
+        })
+        .collect();
+
+    filtered_lines.join("\n")
+}
+
+/// 从 ai_data[12][8]['56'] 提取研究方案确认消息（"这是我拟定的方案" 或 "我已经更新了方案"）
+fn extract_deep_research_plan_confirmation(ai_data: &Value) -> Option<DeepResearchPlan> {
+    if !ai_data.is_array() || vlen(ai_data) <= 12 {
+        return None;
+    }
+
+    let field_12 = vget(ai_data, 12)?;
+    if !field_12.is_array() || vlen(field_12) <= 8 {
+        return None;
+    }
+
+    let field_8 = vget(field_12, 8)?;
+    if !field_8.is_object() {
+        return None;
+    }
+
+    // 提取 "56" 字段（研究方案确认消息）
+    let field_56 = field_8.get("56")?.as_array()?;
+    if field_56.len() < 2 {
+        return None;
+    }
+
+    // field_56[0] 是标题
+    let title = field_56[0].as_str()?.to_string();
+
+    // field_56[1] 是步骤数组
+    // 格式: [[1, "研究网站", "(1) xxx\n(2) xxx\n..."], [2, "分析结果"], [3, "生成报告"]]
+    let steps_wrapper = field_56[1].as_array()?;
+    if steps_wrapper.is_empty() {
+        return None;
+    }
+
+    // 第一个元素: [1, "研究网站", "步骤内容"]
+    let first_step = steps_wrapper[0].as_array()?;
+    if first_step.len() < 3 {
+        return None;
+    }
+
+    // first_step[2] 是步骤内容文本（编号格式）
+    let steps_text = first_step[2].as_str()?.to_string();
+    if steps_text.is_empty() {
+        return None;
+    }
+
+    // 将单换行符替换为双换行符，以便 Markdown 渲染器正确识别段落
+    // 格式: "(1) xxx\n(2) xxx\n..." -> "(1) xxx\n\n(2) xxx\n\n..."
+    let formatted_steps = steps_text
+        .split('\n')
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Some(DeepResearchPlan {
+        title,
+        steps: remove_placeholder_links(&formatted_steps),
+    })
+}
+
+/// 从 ai_data[12][8]['58'] 提取深度研究方案（最终完成后的方案）
+fn extract_deep_research_plan(ai_data: &Value) -> Option<DeepResearchPlan> {
+    // ai_data[12][8]['58'][1][4] 是研究方案
+    if !ai_data.is_array() || vlen(ai_data) <= 12 {
+        return None;
+    }
+
+    let field_12 = vget(ai_data, 12)?;
+    if !field_12.is_array() || vlen(field_12) <= 8 {
+        return None;
+    }
+
+    let field_8 = vget(field_12, 8)?;
+    if !field_8.is_object() {
+        return None;
+    }
+
+    let field_58 = field_8.get("58")?.as_array()?;
+    if field_58.len() < 2 {
+        return None;
+    }
+
+    // field_58[1][4] 是包含方案数据的数组
+    let field_58_1 = vget(&field_58[1], 4)?.as_array()?;
+    if field_58_1.len() < 3 {
+        return None;
+    }
+
+    // field_58_1[0] 是标题
+    let title = field_58_1[0].as_str()?.to_string();
+
+    // field_58_1[2] 是步骤数组（field_58_1[1] 是 null）
+    let steps_arr = field_58_1[2].as_array()?;
+
+    let mut steps_text = String::new();
+
+    for step in steps_arr.iter() {
+        if let Some(step_arr) = step.as_array() {
+            // 步骤结构: [null, null, null, null, null, [标题, 内容, 数字]]
+            if step_arr.len() > 5 {
+                if let Some(step_data) = step_arr[5].as_array() {
+                    if step_data.len() >= 2 {
+                        // step_data[0] 是步骤标题，step_data[1] 是详细内容
+                        if let (Some(step_title), Some(step_detail)) =
+                            (step_data[0].as_str(), step_data[1].as_str()) {
+                            if !steps_text.is_empty() {
+                                steps_text.push_str("\n\n");
+                            }
+                            steps_text.push_str(&format!("## {}\n\n{}", step_title, step_detail));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if steps_text.is_empty() {
+        return None;
+    }
+
+    Some(DeepResearchPlan {
+        title,
+        steps: remove_placeholder_links(&steps_text),
+    })
 }
 
 // ============================================================================
@@ -570,7 +796,10 @@ pub fn parse_media_item(item: &Value, role: &str) -> MediaFile {
     if let Some(res) = arr.get(17).and_then(|v| v.as_array()) {
         if res.len() >= 3 {
             if let (Some(w), Some(h)) = (res[1].as_i64(), res[2].as_i64()) {
-                media.resolution = Some(Resolution { width: w, height: h });
+                media.resolution = Some(Resolution {
+                    width: w,
+                    height: h,
+                });
             }
         }
     }
@@ -580,6 +809,13 @@ pub fn parse_media_item(item: &Value, role: &str) -> MediaFile {
 
 /// 解析单个对话轮次
 pub fn parse_turn(turn: &Value) -> ParsedTurn {
+    // 提取 turn_id 用于日志
+    let turn_id_for_log = turn.as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_array())
+        .and_then(|ids| if ids.len() > 1 { ids[1].as_str() } else { ids.first().and_then(|v| v.as_str()) })
+        .unwrap_or("unknown");
+
     let mut result = ParsedTurn {
         turn_id: None,
         timestamp: None,
@@ -595,6 +831,9 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
             files: Vec::new(),
             music_meta: None,
             gen_meta: None,
+            deep_research_plan: None,
+
+            deep_research_articles: Vec::new(),
         },
     };
 
@@ -663,15 +902,12 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
 
     // select AI candidate
     let mut ai_data: Option<&Value> = None;
-    let selected_candidate_id = detail_arr
-        .get(3)
-        .and_then(|v| v.as_str());
+    let selected_candidate_id = detail_arr.get(3).and_then(|v| v.as_str());
+    log::info!("🔍 parse_turn [{}]: selected_candidate_id={:?}", turn_id_for_log, selected_candidate_id);
 
     if let Some(candidates_arr) = detail_arr.first().and_then(|v| v.as_array()) {
-        let candidates: Vec<&Value> = candidates_arr
-            .iter()
-            .filter(|c| c.is_array())
-            .collect();
+        let candidates: Vec<&Value> = candidates_arr.iter().filter(|c| c.is_array()).collect();
+        log::info!("🔍 parse_turn [{}]: 找到 {} 个候选响应", turn_id_for_log, candidates.len());
 
         if let Some(sel_id) = selected_candidate_id {
             for c in &candidates {
@@ -683,6 +919,12 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         }
         if ai_data.is_none() && !candidates.is_empty() {
             ai_data = Some(candidates[0]);
+        }
+
+        if let Some(ai) = ai_data {
+            log::info!("🔍 parse_turn [{}]: 选中的 ai_data 是数组={}, 长度={}", turn_id_for_log, ai.is_array(), vlen(ai));
+        } else {
+            log::warn!("🔍 parse_turn [{}]: 没有找到 ai_data", turn_id_for_log);
         }
     }
 
@@ -705,7 +947,7 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         // assistant text from ai_data[1][0]
         if let Some(text_arr) = vget(ai, 1) {
             if let Some(text) = vstr(text_arr, 0) {
-                result.assistant.text = text.to_string();
+                result.assistant.text = remove_placeholder_links(text);
             }
         }
 
@@ -775,7 +1017,28 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         if gen_meta.is_some() {
             result.assistant.gen_meta = gen_meta;
         }
+
+        // Deep research articles from ai_data[30]
+        let articles = extract_deep_research_articles(ai);
+        if !articles.is_empty() {
+            result.assistant.deep_research_articles = articles;
+        }
+
+        // Deep research plan from ai_data[12][8]['56'] or ai_data[12][8]['58']
+        // 优先尝试提取研究方案确认消息（"56" 字段）
+        if let Some(plan) = extract_deep_research_plan_confirmation(ai) {
+            result.assistant.deep_research_plan = Some(plan);
+        } else if let Some(plan) = extract_deep_research_plan(ai) {
+            // 如果没有找到 "56" 字段，尝试提取最终研究方案（"58" 字段）
+            result.assistant.deep_research_plan = Some(plan);
+        }
     }
+
+
+    log::info!(
+        "🔍 parse_turn: 返回结果，deep_research_articles 数量={}",
+        result.assistant.deep_research_articles.len()
+    );
 
     result
 }
@@ -789,12 +1052,24 @@ type MediaIdentityKey = (String, String, String, String, String);
 fn media_identity_key(file_item: &MediaFile) -> MediaIdentityKey {
     if let Some(ref mid) = file_item.media_id {
         if !mid.is_empty() {
-            return ("media_id".into(), mid.clone(), String::new(), String::new(), String::new());
+            return (
+                "media_id".into(),
+                mid.clone(),
+                String::new(),
+                String::new(),
+                String::new(),
+            );
         }
     }
     if let Some(ref u) = file_item.url {
         if !u.is_empty() {
-            return ("url".into(), u.clone(), String::new(), String::new(), String::new());
+            return (
+                "url".into(),
+                u.clone(),
+                String::new(),
+                String::new(),
+                String::new(),
+            );
         }
     }
     (
@@ -841,7 +1116,8 @@ pub fn normalize_turn_media_first_seen(parsed_turns: &mut [ParsedTurn]) {
             let mut turn_seen: HashSet<MediaIdentityKey> = HashSet::new();
             for f in &turn.assistant.files {
                 let key = media_identity_key(f);
-                if turn_seen.contains(&key) || seen_assistant.contains(&key)
+                if turn_seen.contains(&key)
+                    || seen_assistant.contains(&key)
                     || seen_user.contains(&key)
                 {
                     continue;
@@ -909,7 +1185,8 @@ mod tests {
 
     #[test]
     fn test_sanitize_generation_placeholder_text() {
-        let text = "Here is your image\nhttps://lh3.googleusercontent.com/abc_content/img.png\nEnjoy!";
+        let text =
+            "Here is your image\nhttps://lh3.googleusercontent.com/abc_content/img.png\nEnjoy!";
         let result = sanitize_generation_placeholder_text(text, true);
         assert_eq!(result, "Here is your image\nEnjoy!");
 
@@ -920,13 +1197,36 @@ mod tests {
 
     #[test]
     fn test_is_media_descriptor() {
-        let image_desc = json!([null, 1, "photo.jpg", "https://example.com/img.jpg",
-            null, null, null, null, null, null, null, "image/jpeg"]);
+        let image_desc = json!([
+            null,
+            1,
+            "photo.jpg",
+            "https://example.com/img.jpg",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "image/jpeg"
+        ]);
         assert!(is_media_descriptor(&image_desc));
 
-        let video_desc = json!([null, 2, "vid.mp4", null, null, null, null,
+        let video_desc = json!([
+            null,
+            2,
+            "vid.mp4",
+            null,
+            null,
+            null,
+            null,
             ["https://thumb.com/t.jpg", "https://example.com/v.mp4"],
-            null, null, null, "video/mp4"]);
+            null,
+            null,
+            null,
+            "video/mp4"
+        ]);
         assert!(is_media_descriptor(&video_desc));
 
         let not_media = json!([null, 3, "file.txt"]);
@@ -935,8 +1235,20 @@ mod tests {
 
     #[test]
     fn test_parse_media_item_image() {
-        let item = json!([null, 1, "photo.jpg", "https://example.com/img.jpg",
-            null, null, null, null, null, null, null, "image/jpeg"]);
+        let item = json!([
+            null,
+            1,
+            "photo.jpg",
+            "https://example.com/img.jpg",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "image/jpeg"
+        ]);
         let parsed = parse_media_item(&item, "assistant");
         assert_eq!(parsed.media_type, "image");
         assert_eq!(parsed.url.as_deref(), Some("https://example.com/img.jpg"));
@@ -946,20 +1258,48 @@ mod tests {
 
     #[test]
     fn test_parse_media_item_video() {
-        let item = json!([null, 2, "vid.mp4", null, null, null, null,
+        let item = json!([
+            null,
+            2,
+            "vid.mp4",
+            null,
+            null,
+            null,
+            null,
             ["https://thumb.com/t.jpg", "https://example.com/v.mp4"],
-            null, null, null, "video/mp4"]);
+            null,
+            null,
+            null,
+            "video/mp4"
+        ]);
         let parsed = parse_media_item(&item, "user");
         assert_eq!(parsed.media_type, "video");
         assert_eq!(parsed.url.as_deref(), Some("https://example.com/v.mp4"));
-        assert_eq!(parsed.thumbnail_url.as_deref(), Some("https://thumb.com/t.jpg"));
+        assert_eq!(
+            parsed.thumbnail_url.as_deref(),
+            Some("https://thumb.com/t.jpg")
+        );
     }
 
     #[test]
     fn test_parse_media_item_duration() {
-        let item = json!([null, 2, "vid.mp4", null, null, null, null,
-            ["https://example.com/v.mp4"], null, null, null, "video/mp4",
-            null, null, [[30, 772244000]]]);
+        let item = json!([
+            null,
+            2,
+            "vid.mp4",
+            null,
+            null,
+            null,
+            null,
+            ["https://example.com/v.mp4"],
+            null,
+            null,
+            null,
+            "video/mp4",
+            null,
+            null,
+            [[30, 772244000]]
+        ]);
         let parsed = parse_media_item(&item, "assistant");
         assert!(parsed.duration.is_some());
         let dur = parsed.duration.unwrap();
@@ -969,21 +1309,28 @@ mod tests {
     #[test]
     fn test_parse_turn_basic() {
         let turn = json!([
-            ["conv_id", "turn_abc"],           // [0] ids
-            null,                               // [1]
-            [[                                  // [2] content
-                "Hello world",                  // [2][0][0] user text
-                null, null, null, null
+            ["conv_id", "turn_abc"], // [0] ids
+            null,                    // [1]
+            [[
+                // [2] content
+                "Hello world", // [2][0][0] user text
+                null,
+                null,
+                null,
+                null
             ]],
-            [                                   // [3] detail
-                [[                              // [3][0] candidates
-                    "cand_1",                   // [3][0][0][0] candidate id
-                    ["AI response text"],       // [3][0][0][1] text
+            [
+                // [3] detail
+                [[
+                    // [3][0] candidates
+                    "cand_1",             // [3][0][0][0] candidate id
+                    ["AI response text"], // [3][0][0][1] text
                 ]],
-                null, null,
-                "cand_1",                       // [3][3] selected candidate id
+                null,
+                null,
+                "cand_1", // [3][3] selected candidate id
             ],
-            [1700000000]                        // [4] timestamp
+            [1700000000] // [4] timestamp
         ]);
         let parsed = parse_turn(&turn);
         assert_eq!(parsed.turn_id.as_deref(), Some("turn_abc"));
@@ -999,34 +1346,39 @@ mod tests {
                 turn_id: Some("t1".into()),
                 timestamp: Some(100),
                 timestamp_iso: None,
-                user: RoleContent { text: String::new(), files: Vec::new() },
+                user: RoleContent {
+                    text: String::new(),
+                    files: Vec::new(),
+                },
                 assistant: AssistantContent {
                     text: String::new(),
                     thinking: String::new(),
                     model: String::new(),
-                    files: vec![
-                        MediaFile {
-                            role: "assistant".into(),
-                            media_type: "image".into(),
-                            filename: None,
-                            mime: None,
-                            url: Some("https://example.com/a.jpg".into()),
-                            thumbnail_url: None,
-                            duration: None,
-                            resolution: None,
-                            media_id: None,
-                            preview_media_id: None,
-                        },
-                    ],
+                    files: vec![MediaFile {
+                        role: "assistant".into(),
+                        media_type: "image".into(),
+                        filename: None,
+                        mime: None,
+                        url: Some("https://example.com/a.jpg".into()),
+                        thumbnail_url: None,
+                        duration: None,
+                        resolution: None,
+                        media_id: None,
+                        preview_media_id: None,
+                    }],
                     music_meta: None,
                     gen_meta: None,
+                    deep_research_articles: Vec::new(),
                 },
             },
             ParsedTurn {
                 turn_id: Some("t2".into()),
                 timestamp: Some(200),
                 timestamp_iso: None,
-                user: RoleContent { text: String::new(), files: Vec::new() },
+                user: RoleContent {
+                    text: String::new(),
+                    files: Vec::new(),
+                },
                 assistant: AssistantContent {
                     text: String::new(),
                     thinking: String::new(),
@@ -1059,6 +1411,7 @@ mod tests {
                     ],
                     music_meta: None,
                     gen_meta: None,
+                    deep_research_articles: Vec::new(),
                 },
             },
         ];
@@ -1067,5 +1420,79 @@ mod tests {
         // t2 (latest) keeps both; t1 loses "a.jpg" because t2 claimed it first
         assert_eq!(turns[1].assistant.files.len(), 2);
         assert_eq!(turns[0].assistant.files.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_deep_research_articles() {
+        // 模拟包含深度研究文章的 ai_data
+        let ai_data = json!([
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null, // 0-9
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null, // 10-19
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null, // 20-29
+            [
+                // [30] 深度研究文章列表
+                [
+                    "c_test_composite_id",
+                    "test-uuid-1234",
+                    "测试文章标题",
+                    "doc-uuid-5678",
+                    "# 测试文章\n\n这是一篇测试深度研究文章的内容。\n\n## 章节1\n内容..."
+                ]
+            ]
+        ]);
+
+        let articles = extract_deep_research_articles(&ai_data);
+        assert_eq!(articles.len(), 1);
+
+        let article = &articles[0];
+        assert_eq!(article.composite_id, "c_test_composite_id");
+        assert_eq!(article.uuid, "test-uuid-1234");
+        assert_eq!(article.title, "测试文章标题");
+        assert_eq!(article.doc_uuid, "doc-uuid-5678");
+        assert!(article.article_markdown.starts_with("# 测试文章"));
+    }
+
+    #[test]
+    fn test_extract_deep_research_articles_empty() {
+        // ai_data 长度不足
+        let ai_data = json!([null, null, null]);
+        let articles = extract_deep_research_articles(&ai_data);
+        assert_eq!(articles.len(), 0);
+
+        // ai_data[30] 为 null
+        let ai_data = json!([
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null
+        ]);
+        let articles = extract_deep_research_articles(&ai_data);
+        assert_eq!(articles.len(), 0);
     }
 }

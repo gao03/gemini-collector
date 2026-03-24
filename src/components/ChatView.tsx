@@ -1444,6 +1444,134 @@ function MessageBubble({
           </div>
         )}
         {!isUser && attachmentsBlock}
+        {!isUser && message.deep_research_plan && (
+          <div style={{
+            marginTop: 12,
+            padding: "12px 16px",
+            borderRadius: "18px 18px 18px 6px",
+            background: t.aiBubbleBg,
+            color: t.text,
+            fontSize: 14,
+            lineHeight: 1.55,
+            boxShadow: t.isDark ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.07)",
+            wordBreak: "break-word",
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+              🔍 {message.deep_research_plan.title}
+            </div>
+            <div className={`prose-ai${t.isDark ? " prose-dark" : ""}`}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+                components={{
+                  a: ({ href, children, ...props }) => (
+                    <a
+                      {...props}
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (!href) return;
+                        void openUrl(href);
+                      }}
+                    >
+                      {children}
+                    </a>
+                  ),
+                  pre: ({ children }) => <>{children}</>,
+                  code: ({ className, children, ...props }) => {
+                    const content = String(children ?? "");
+                    const isBlock =
+                      (className || "").includes("language-") || content.includes("\n");
+                    if (!isBlock) {
+                      return (
+                        <code className={className} {...props}>
+                          {children}
+                        </code>
+                      );
+                    }
+                    return (
+                      <MarkdownCodeBlock
+                        code={content.replace(/\n$/, "")}
+                        language={markdownCodeLanguage(className)}
+                        isDark={t.isDark}
+                      />
+                    );
+                  },
+                }}
+              >
+                {fixMarkdown(message.deep_research_plan.steps)}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
+        {!isUser && message.deep_research_articles && message.deep_research_articles.length > 0 && (
+          <>
+            {message.deep_research_articles.map((article, idx) => (
+              <div key={article.uuid} style={{
+                marginTop: 12,
+                padding: "12px 16px",
+                borderRadius: "18px 18px 18px 6px",
+                background: t.aiBubbleBg,
+                color: t.text,
+                fontSize: 14,
+                lineHeight: 1.55,
+                boxShadow: t.isDark ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.07)",
+                wordBreak: "break-word",
+              }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  📚 {article.title}
+                </div>
+                <div className={`prose-ai${t.isDark ? " prose-dark" : ""}`}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={{
+                      a: ({ href, children, ...props }) => (
+                        <a
+                          {...props}
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (!href) return;
+                            void openUrl(href);
+                          }}
+                        >
+                          {children}
+                        </a>
+                      ),
+                      pre: ({ children }) => <>{children}</>,
+                      code: ({ className, children, ...props }) => {
+                        const content = String(children ?? "");
+                        const isBlock =
+                          (className || "").includes("language-") || content.includes("\n");
+                        if (!isBlock) {
+                          return (
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          );
+                        }
+                        return (
+                          <MarkdownCodeBlock
+                            code={content.replace(/\n$/, "")}
+                            language={markdownCodeLanguage(className)}
+                            isDark={t.isDark}
+                          />
+                        );
+                      },
+                    }}
+                  >
+                    {fixMarkdown(article.article_markdown)}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
         <div style={{ fontSize: 11, color: t.textMuted, marginTop: hasText ? 3 : 1, textAlign: isUser ? "right" : "left", padding: "0 4px", display: "flex", gap: 4, justifyContent: isUser ? "flex-end" : "flex-start", alignItems: "center", flexWrap: "wrap" }}>
           <span>{formatMsgDate(message.timestamp)} {formatMsgTime(message.timestamp)}</span>
           {!isUser && (

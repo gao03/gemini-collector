@@ -18,8 +18,8 @@ use serde_json::json;
 
 use crate::browser_info;
 use crate::protocol::{
-    request_backoff_seconds, REQUEST_BACKOFF_LIMIT_FAILURES, REQUEST_BACKOFF_MAX_SECONDS,
-    REQUEST_DELAY, REQUEST_JITTER_MAX, REQUEST_JITTER_MIN, ProtocolError,
+    request_backoff_seconds, ProtocolError, REQUEST_BACKOFF_LIMIT_FAILURES,
+    REQUEST_BACKOFF_MAX_SECONDS, REQUEST_DELAY, REQUEST_JITTER_MAX, REQUEST_JITTER_MIN,
 };
 use crate::storage;
 
@@ -49,7 +49,10 @@ pub fn build_http_client(cookies: &HashMap<String, String>) -> reqwest::Client {
     if let Ok(val) = reqwest::header::HeaderValue::from_str(browser_info::build_sec_ch_ua()) {
         headers.insert("sec-ch-ua", val);
     }
-    headers.insert("sec-ch-ua-mobile", reqwest::header::HeaderValue::from_static("?0"));
+    headers.insert(
+        "sec-ch-ua-mobile",
+        reqwest::header::HeaderValue::from_static("?0"),
+    );
     if let Ok(val) = reqwest::header::HeaderValue::from_str(browser_info::platform_hint()) {
         headers.insert("sec-ch-ua-platform", val);
     }
@@ -116,12 +119,9 @@ impl GeminiExporter {
             state = json!({});
         }
         let obj = state.as_object_mut().unwrap();
-        obj.entry("version")
-            .or_insert(json!(1));
+        obj.entry("version").or_insert(json!(1));
         obj.entry("accountId")
-            .or_insert_with(|| {
-                json!(dir.file_name().and_then(|s| s.to_str()).unwrap_or(""))
-            });
+            .or_insert_with(|| json!(dir.file_name().and_then(|s| s.to_str()).unwrap_or("")));
         obj.insert("updatedAt".to_string(), json!(now_iso));
         obj.insert("requestState".to_string(), self.current_request_state());
 
@@ -144,7 +144,8 @@ impl GeminiExporter {
                         (count as u32).min(REQUEST_BACKOFF_LIMIT_FAILURES),
                         Ordering::Relaxed,
                     );
-                    self.request_state_account_dir.store(Arc::new(Some(account_dir)));
+                    self.request_state_account_dir
+                        .store(Arc::new(Some(account_dir)));
                     return;
                 }
             }
@@ -162,7 +163,8 @@ impl GeminiExporter {
             }
         }
 
-        self.request_state_account_dir.store(Arc::new(Some(account_dir)));
+        self.request_state_account_dir
+            .store(Arc::new(Some(account_dir)));
     }
 
     /// 请求前等待：延迟 + 退避 + 退避上限探测。
@@ -185,7 +187,8 @@ impl GeminiExporter {
                 self.limit_probe_consumed.store(true, Ordering::Relaxed);
                 log::warn!(
                     "[backoff] 连续失败达到上限，放行一次启动探测请求: failures={}, op={}",
-                    failures, label
+                    failures,
+                    label
                 );
             } else {
                 self.sync_request_state_file();
@@ -201,7 +204,8 @@ impl GeminiExporter {
                 crate::protocol::REQUEST_JITTER_MODE,
             );
             let delay_sec = REQUEST_DELAY + jitter;
-            self.last_delay_sec.store(delay_sec.to_bits(), Ordering::Relaxed);
+            self.last_delay_sec
+                .store(delay_sec.to_bits(), Ordering::Relaxed);
             tokio::time::sleep(std::time::Duration::from_secs_f64(delay_sec)).await;
         }
 
@@ -210,7 +214,9 @@ impl GeminiExporter {
             self.sync_request_state_file();
             log::warn!(
                 "[backoff] 连续失败退避等待: failures={}, wait={:.2}s, op={}",
-                failures, backoff_sec, label
+                failures,
+                backoff_sec,
+                label
             );
             tokio::time::sleep(std::time::Duration::from_secs_f64(backoff_sec)).await;
         }
@@ -224,7 +230,8 @@ impl GeminiExporter {
         if self.request_consecutive_failures.load(Ordering::Relaxed) == 0 {
             return;
         }
-        self.request_consecutive_failures.store(0, Ordering::Relaxed);
+        self.request_consecutive_failures
+            .store(0, Ordering::Relaxed);
         self.limit_probe_consumed.store(false, Ordering::Relaxed);
         self.sync_request_state_file();
     }
@@ -254,9 +261,7 @@ impl GeminiExporter {
     ) -> Result<reqwest::Response, String> {
         let mut last_err = String::new();
         for _ in 0..attempts {
-            self.before_request("http_get")
-                .await
-                .str_err()?;
+            self.before_request("http_get").await.str_err()?;
 
             let mut req = self.client.get(url);
             if !params.is_empty() {

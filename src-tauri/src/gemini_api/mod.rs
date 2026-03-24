@@ -9,11 +9,11 @@ pub mod batchexecute;
 pub mod http_client;
 pub mod media_download;
 
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 
 /// 媒体下载专用 Cookie 名称列表
 pub const GOOGLE_MEDIA_COOKIE_NAMES: &[&str] = &[
@@ -86,7 +86,9 @@ impl GeminiExporter {
         let client = http_client::build_http_client(&cookies);
         Self {
             cookies,
-            user_spec: user_spec.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            user_spec: user_spec
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             account_id_override: account_id_override
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),

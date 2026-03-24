@@ -1,14 +1,14 @@
 pub mod browser_info;
 pub mod cookies;
 mod export;
-mod sync;
 pub mod gemini_api;
 mod import;
 pub mod media;
 pub mod protocol;
 mod search;
-pub mod str_err;
 pub mod storage;
+pub mod str_err;
+mod sync;
 pub mod turn_parser;
 mod worker_host;
 
@@ -21,16 +21,17 @@ use worker_host::EnqueueJobRequest;
 use export::{resolve_account_id_arg, value_to_non_empty_string};
 use str_err::ToStringErr;
 
-fn read_account_registry_entry(data_dir: &Path, account_id: &str) -> Result<serde_json::Value, String> {
+fn read_account_registry_entry(
+    data_dir: &Path,
+    account_id: &str,
+) -> Result<serde_json::Value, String> {
     let accounts_file = data_dir.join("accounts.json");
     if !accounts_file.exists() {
         return Err("accounts.json 不存在".to_string());
     }
 
-    let registry: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&accounts_file).str_err()?,
-    )
-    .str_err()?;
+    let registry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&accounts_file).str_err()?).str_err()?;
 
     let entries = registry
         .get("accounts")
@@ -80,7 +81,8 @@ fn conversation_meta_info(jsonl_file: &Path) -> (bool, Option<String>) {
         Ok(v) => v,
         Err(_) => return (false, None),
     };
-    let has_failed = raw.contains("\"downloadFailed\": true") || raw.contains("\"downloadFailed\":true");
+    let has_failed =
+        raw.contains("\"downloadFailed\": true") || raw.contains("\"downloadFailed\":true");
     let created_at = raw.lines().next().and_then(|line| {
         let v: serde_json::Value = serde_json::from_str(line).ok()?;
         v.get("createdAt")?.as_str().map(|s| s.to_string())
@@ -103,7 +105,9 @@ fn delete_conversation(
     let bare_id = protocol::strip_c_prefix(&conversation_id);
 
     // 删除 .jsonl 文件
-    let conv_file = account_dir.join("conversations").join(format!("{}.jsonl", bare_id));
+    let conv_file = account_dir
+        .join("conversations")
+        .join(format!("{}.jsonl", bare_id));
     if conv_file.exists() {
         std::fs::remove_file(&conv_file).str_err()?;
     }
@@ -265,7 +269,10 @@ fn clear_account_data(
     obj.insert("avatarText".to_string(), serde_json::json!(avatar_text));
     obj.insert("avatarColor".to_string(), serde_json::json!(avatar_color));
     obj.insert("conversationCount".to_string(), serde_json::json!(0));
-    obj.insert("remoteConversationCount".to_string(), serde_json::Value::Null);
+    obj.insert(
+        "remoteConversationCount".to_string(),
+        serde_json::Value::Null,
+    );
     obj.insert("lastSyncAt".to_string(), serde_json::Value::Null);
     obj.insert("lastSyncResult".to_string(), serde_json::Value::Null);
     obj.insert(
@@ -292,10 +299,8 @@ fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
         return Ok("[]".to_string());
     }
 
-    let registry: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&accounts_file).str_err()?,
-    )
-    .str_err()?;
+    let registry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&accounts_file).str_err()?).str_err()?;
 
     let entries = match registry.get("accounts").and_then(|v| v.as_array()) {
         Some(a) => a.clone(),
@@ -304,10 +309,7 @@ fn load_accounts(app: tauri::AppHandle) -> Result<String, String> {
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     for entry in &entries {
-        let data_dir_rel = entry
-            .get("dataDir")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let data_dir_rel = entry.get("dataDir").and_then(|v| v.as_str()).unwrap_or("");
         let list_sync_pending = is_list_sync_pending(&data_dir, data_dir_rel);
         let meta_file = data_dir.join(data_dir_rel).join("meta.json");
 
@@ -400,11 +402,10 @@ fn extract_cookies_via_cookie_manager(
                     let cookie_manager = core2.CookieManager().unwrap();
 
                     let tx_clone = tx.clone();
-                    let handler = GetCookiesCompletedHandler::create(Box::new(
-                        move |hr, cookie_list| {
+                    let handler =
+                        GetCookiesCompletedHandler::create(Box::new(move |hr, cookie_list| {
                             if hr.is_err() {
-                                let _ =
-                                    tx_clone.send(Err(format!("GetCookies HRESULT: {:?}", hr)));
+                                let _ = tx_clone.send(Err(format!("GetCookies HRESULT: {:?}", hr)));
                                 return Ok(());
                             }
                             let mut cookies = HashMap::new();
@@ -430,8 +431,7 @@ fn extract_cookies_via_cookie_manager(
                             }
                             let _ = tx_clone.send(Ok(cookies));
                             Ok(())
-                        },
-                    ));
+                        }));
 
                     let uri_wide: Vec<u16> = url_owned.encode_utf16().collect();
                     cookie_manager
@@ -506,20 +506,23 @@ async fn open_google_login(app: tauri::AppHandle) -> Result<String, String> {
     let cookies = loop {
         match rx.recv().await {
             Some(()) => {
-                log::info!("检测到用户到达 gemini.google.com/app，通过 CookieManager 提取 Cookie...");
+                log::info!(
+                    "检测到用户到达 gemini.google.com/app，通过 CookieManager 提取 Cookie..."
+                );
 
                 // 通过 with_webview → ICoreWebView2CookieManager 提取 Cookie
                 match extract_cookies_via_cookie_manager(&login_window) {
                     Ok(c) if key_cookies.iter().any(|k| c.contains_key(*k)) => {
                         let keys: Vec<_> = c.keys().cloned().collect();
-                        log::info!("CookieManager 提取成功，共 {} 个 cookie, keys={:?}", c.len(), keys);
+                        log::info!(
+                            "CookieManager 提取成功，共 {} 个 cookie, keys={:?}",
+                            c.len(),
+                            keys
+                        );
                         break c;
                     }
                     Ok(c) => {
-                        log::info!(
-                            "已提取 {} 个 cookies，缺少关键登录态，继续等待",
-                            c.len()
-                        );
+                        log::info!("已提取 {} 个 cookies，缺少关键登录态，继续等待", c.len());
                     }
                     Err(e) => log::warn!("CookieManager 提取失败: {}", e),
                 }
@@ -561,12 +564,7 @@ async fn open_google_login(app: tauri::AppHandle) -> Result<String, String> {
     std::fs::create_dir_all(account_dir.join("conversations")).str_err()?;
     std::fs::create_dir_all(account_dir.join("media")).str_err()?;
 
-    let name = m
-        .email
-        .split('@')
-        .next()
-        .unwrap_or(&account_id)
-        .to_string();
+    let name = m.email.split('@').next().unwrap_or(&account_id).to_string();
     let avatar_text = name
         .chars()
         .next()
@@ -634,22 +632,19 @@ async fn run_accounts_import(app: tauri::AppHandle) -> Result<String, String> {
     let data_dir = app.path().app_data_dir().str_err()?;
 
     // 读取浏览器 cookies
-    let all_cookies = tokio::task::spawn_blocking(|| {
-        cookies::get_cookies_from_local_browser()
-    })
-    .await
-    .map_err(|e| format!("cookies 读取任务失败: {}", e))?
-    .map_err(|e| format!("cookies 读取失败: {}", e))?;
+    let all_cookies = tokio::task::spawn_blocking(|| cookies::get_cookies_from_local_browser())
+        .await
+        .map_err(|e| format!("cookies 读取任务失败: {}", e))?
+        .map_err(|e| format!("cookies 读取失败: {}", e))?;
 
     if all_cookies.is_empty() {
         return Err("未能从浏览器读取到 cookies，请确保 Chrome 已登录 Gemini".to_string());
     }
 
     // 发现 email ↔ authuser 映射
-    let mappings =
-        cookies::list_accounts::discover_email_authuser_mapping(&all_cookies)
-            .await
-            .map_err(|e| format!("账号发现失败: {}", e))?;
+    let mappings = cookies::list_accounts::discover_email_authuser_mapping(&all_cookies)
+        .await
+        .map_err(|e| format!("账号发现失败: {}", e))?;
 
     if mappings.is_empty() {
         return Err("未发现已登录的 Gemini 账号".to_string());
@@ -725,7 +720,8 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
     let existing_entries: std::collections::HashMap<String, serde_json::Value> = {
         let f = data_dir.join("accounts.json");
         if f.exists() {
-            std::fs::read_to_string(&f).ok()
+            std::fs::read_to_string(&f)
+                .ok()
                 .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
                 .and_then(|d| d.get("accounts")?.as_array().cloned())
                 .unwrap_or_default()
@@ -753,7 +749,8 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
         let existing_meta: serde_json::Value = {
             let f = account_dir.join("meta.json");
             if f.exists() {
-                std::fs::read_to_string(&f).ok()
+                std::fs::read_to_string(&f)
+                    .ok()
                     .and_then(|c| serde_json::from_str(&c).ok())
                     .unwrap_or(serde_json::json!({}))
             } else {
@@ -761,18 +758,25 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
             }
         };
         let get_meta = |key: &str| -> serde_json::Value {
-            existing_meta.get(key).cloned().unwrap_or(serde_json::Value::Null)
+            existing_meta
+                .get(key)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
         };
 
-        let name = existing_meta.get("name")
+        let name = existing_meta
+            .get("name")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| m.email.split('@').next().unwrap_or(&account_id))
             .to_string();
-        let avatar_text = name.chars().next()
+        let avatar_text = name
+            .chars()
+            .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".to_string());
-        let avatar_color = existing_meta.get("avatarColor")
+        let avatar_color = existing_meta
+            .get("avatarColor")
             .and_then(|v| v.as_str())
             .unwrap_or("#667eea")
             .to_string();
@@ -793,9 +797,11 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
         std::fs::write(
             account_dir.join("meta.json"),
             serde_json::to_string_pretty(&meta).str_err()?,
-        ).str_err()?;
+        )
+        .str_err()?;
 
-        let added_at = existing_entries.get(&account_id)
+        let added_at = existing_entries
+            .get(&account_id)
             .and_then(|v| v.get("addedAt").and_then(|v| v.as_str()))
             .unwrap_or(&now_iso)
             .to_string();
@@ -819,13 +825,15 @@ async fn reload_accounts_import(app: tauri::AppHandle) -> Result<String, String>
     std::fs::write(
         data_dir.join("accounts.json"),
         serde_json::to_string_pretty(&accounts_data).str_err()?,
-    ).str_err()?;
+    )
+    .str_err()?;
 
     Ok(serde_json::json!({
         "status": "ok",
         "imported": imported_ids.len(),
         "accounts": imported_ids,
-    }).to_string())
+    })
+    .to_string())
 }
 
 #[tauri::command]
@@ -848,7 +856,10 @@ async fn cancel_job(
 
 /// Read `accounts/{id}/conversations.json` and return the `items` array as JSON string.
 #[tauri::command]
-fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Result<String, String> {
+fn load_conversation_summaries(
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<String, String> {
     let data_dir = app.path().app_data_dir().str_err()?;
     let account_dir = data_dir.join("accounts").join(&account_id);
     let conv_file = data_dir
@@ -880,10 +891,7 @@ fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Res
             .filter(|v| !v.is_empty())
             .unwrap_or("normal")
             .to_string();
-        obj.insert(
-            "status".to_string(),
-            serde_json::Value::String(status),
-        );
+        obj.insert("status".to_string(), serde_json::Value::String(status));
 
         let cid = obj
             .get("id")
@@ -895,7 +903,8 @@ fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Res
             continue;
         }
 
-        let (has_failed_data, created_at) = conversation_meta_info(&conversations_dir.join(format!("{}.jsonl", cid)));
+        let (has_failed_data, created_at) =
+            conversation_meta_info(&conversations_dir.join(format!("{}.jsonl", cid)));
         obj.insert(
             "hasFailedData".to_string(),
             serde_json::Value::Bool(has_failed_data),
@@ -912,10 +921,7 @@ fn load_conversation_summaries(app: tauri::AppHandle, account_id: String) -> Res
 #[tauri::command]
 fn get_account_media_dir(app: tauri::AppHandle, account_id: String) -> Result<String, String> {
     let data_dir = app.path().app_data_dir().str_err()?;
-    let media_dir = data_dir
-        .join("accounts")
-        .join(account_id)
-        .join("media");
+    let media_dir = data_dir.join("accounts").join(account_id).join("media");
     Ok(media_dir.to_string_lossy().to_string())
 }
 
@@ -1055,7 +1061,10 @@ fn load_conversation_detail(
         );
         log::warn!(
             "[load_conversation_detail] account={} conversation={} parse_errors={} lines={:?}",
-            account_id, bare_id, parse_error_count, parse_error_lines
+            account_id,
+            bare_id,
+            parse_error_count,
+            parse_error_lines
         );
         Some(warning)
     } else {
@@ -1063,10 +1072,7 @@ fn load_conversation_detail(
     };
 
     // 为每个 attachment 注入 size 字段（从 media 目录查找文件大小）
-    let media_dir = data_dir
-        .join("accounts")
-        .join(&account_id)
-        .join("media");
+    let media_dir = data_dir.join("accounts").join(&account_id).join("media");
     for msg in messages.iter_mut() {
         if let Some(atts) = msg.get_mut("attachments").and_then(|v| v.as_array_mut()) {
             for att in atts.iter_mut() {
@@ -1076,7 +1082,10 @@ fn load_conversation_detail(
                             if !media_id.is_empty() {
                                 let file_path = media_dir.join(media_id);
                                 if let Ok(meta_fs) = std::fs::metadata(&file_path) {
-                                    obj.insert("size".to_string(), serde_json::Value::Number(meta_fs.len().into()));
+                                    obj.insert(
+                                        "size".to_string(),
+                                        serde_json::Value::Number(meta_fs.len().into()),
+                                    );
                                 }
                             }
                         }
@@ -1102,7 +1111,10 @@ fn load_conversation_detail(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let remote_hash = meta_val.get("remoteHash").cloned().unwrap_or(serde_json::Value::Null);
+    let remote_hash = meta_val
+        .get("remoteHash")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let account_id_meta = meta_val
         .get("accountId")
         .and_then(|v| v.as_str())

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        rust: [stable]
+
+    steps:
+      - name: Checkout代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: 检查代码格式
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: 运行 Clippy 检查
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features
+
+      - name: 运行测试
+        working-directory: src-tauri
+        run: cargo test --verbose
+
+      - name: 检查依赖安全性
+        working-directory: src-tauri
+        run: |
+          cargo install cargo-audit || true
+          cargo audit || true

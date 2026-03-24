@@ -18,9 +18,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 use crate::cookies;
+use crate::gemini_api::GeminiExporter;
 use crate::str_err::ToStringErr;
 use crate::sync::CancellationToken;
-use crate::gemini_api::GeminiExporter;
 
 const WORKER_EVENT_JOB_STATE: &str = "worker://job_state";
 
@@ -121,17 +121,17 @@ impl WorkerHost {
 
         #[cfg(target_os = "windows")]
         {
-            return Err("Windows 上需要先通过 WebView2 登录获取 cookies（请点击登录按钮）".to_string());
+            return Err(
+                "Windows 上需要先通过 WebView2 登录获取 cookies（请点击登录按钮）".to_string(),
+            );
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            let cookies = tokio::task::spawn_blocking(|| {
-                cookies::get_cookies_from_local_browser()
-            })
-            .await
-            .map_err(|e| format!("cookies 读取任务失败: {}", e))?
-            .map_err(|e| format!("cookies 读取失败: {}", e))?;
+            let cookies = tokio::task::spawn_blocking(|| cookies::get_cookies_from_local_browser())
+                .await
+                .map_err(|e| format!("cookies 读取任务失败: {}", e))?
+                .map_err(|e| format!("cookies 读取失败: {}", e))?;
 
             if cookies.is_empty() {
                 return Err("本机浏览器 cookies 读取结果为空".to_string());
@@ -152,7 +152,10 @@ impl WorkerHost {
     }
 
     /// 从 accounts.json 读取指定账号的 authuser 和 email
-    fn read_account_mapping(&self, account_id: &str) -> Result<(Option<String>, Option<String>), String> {
+    fn read_account_mapping(
+        &self,
+        account_id: &str,
+    ) -> Result<(Option<String>, Option<String>), String> {
         let accounts_file = self.output_dir.join("accounts.json");
         if !accounts_file.exists() {
             return Err("accounts.json 不存在，请先导入账号".to_string());
@@ -183,7 +186,10 @@ impl WorkerHost {
     }
 
     /// 获取或创建某个账号的 exporter
-    async fn get_exporter(self: &Arc<Self>, account_id: &str) -> Result<Arc<GeminiExporter>, String> {
+    async fn get_exporter(
+        self: &Arc<Self>,
+        account_id: &str,
+    ) -> Result<Arc<GeminiExporter>, String> {
         {
             let sessions = self.sessions.lock().await;
             if let Some(session) = sessions.get(account_id) {
@@ -221,7 +227,10 @@ impl WorkerHost {
     }
 
     /// 刷新某个账号的 exporter session（重新读取 cookies）
-    async fn refresh_session(self: &Arc<Self>, account_id: &str) -> Result<Arc<GeminiExporter>, String> {
+    async fn refresh_session(
+        self: &Arc<Self>,
+        account_id: &str,
+    ) -> Result<Arc<GeminiExporter>, String> {
         log::warn!("session 过期，重建 exporter (account={})", account_id);
 
         // 清空 cookie 缓存
@@ -266,11 +275,7 @@ impl WorkerHost {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     if is_session_expired_error(&e) && attempt < MAX_SESSION_RETRIES {
-                        log::warn!(
-                            "第 {} 次 session 过期，正在重建: {}",
-                            attempt + 1,
-                            e
-                        );
+                        log::warn!("第 {} 次 session 过期，正在重建: {}", attempt + 1, e);
                         exporter = self.refresh_session(account_id).await?;
                         continue;
                     }
@@ -386,7 +391,8 @@ impl WorkerHost {
             load_conversation_ids(&items_before).into_iter().collect();
 
         // 1) 失败重试
-        let retry_ids = collect_failed_conversation_ids(&self.output_dir, account_id, &items_before);
+        let retry_ids =
+            collect_failed_conversation_ids(&self.output_dir, account_id, &items_before);
         log::info!("[retry_failed] 失败记录重试: {}", retry_ids.len());
         let retry_result = self
             .sync_conversation_batch(ctx, &retry_ids, "retry_failed", cancel)
@@ -408,10 +414,8 @@ impl WorkerHost {
         self.emit_job_state(ctx, "running", Some("refresh_list"), None, None);
         log::info!("[refresh_list] 拉取最新列表");
         let list_result = self.execute_sync_list(ctx, true, cancel).await?;
-        let after_ids = load_conversation_ids(&load_conversation_items(
-            &self.output_dir,
-            account_id,
-        ));
+        let after_ids =
+            load_conversation_ids(&load_conversation_items(&self.output_dir, account_id));
         let updated_ids_from_list: std::collections::HashSet<String> = list_result
             .get("updatedIds")
             .and_then(|v| v.as_array())
@@ -443,10 +447,7 @@ impl WorkerHost {
             })
             .cloned()
             .collect();
-        log::info!(
-            "[sync_old] 剩余老会话检查更新: {}",
-            remaining_old_ids.len()
-        );
+        log::info!("[sync_old] 剩余老会话检查更新: {}", remaining_old_ids.len());
         let old_result = self
             .sync_conversation_batch(ctx, &remaining_old_ids, "sync_old", cancel)
             .await?;
@@ -552,11 +553,7 @@ impl WorkerHost {
             }
 
             if cancel.is_cancelled() {
-                return Err(format!(
-                    "用户取消，已处理 {}/{} 个对话",
-                    idx + 1,
-                    total
-                ));
+                return Err(format!("用户取消，已处理 {}/{} 个对话", idx + 1, total));
             }
 
             self.emit_job_state(
@@ -569,7 +566,12 @@ impl WorkerHost {
 
             log::info!(
                 "[{}] 进度: {}/{} ok={} fail={} cid={} {}ms",
-                phase, idx + 1, total, succeeded.len(), failed.len(), cid,
+                phase,
+                idx + 1,
+                total,
+                succeeded.len(),
+                failed.len(),
+                cid,
                 t_conv.elapsed().as_millis()
             );
         }
@@ -599,10 +601,7 @@ impl WorkerHost {
 
         // 2) 同步有更新的会话
         if !updated_ids.is_empty() {
-            log::info!(
-                "[sync_incremental] 需要更新 {} 个会话",
-                updated_ids.len()
-            );
+            log::info!("[sync_incremental] 需要更新 {} 个会话", updated_ids.len());
             let _ = self
                 .sync_conversation_batch(ctx, &updated_ids, "sync_updated", cancel)
                 .await?;
@@ -686,23 +685,11 @@ impl WorkerHost {
                 }
                 Err(ref e) if is_backoff_limit_error(e) => {
                     log::warn!("任务因退避兜底提前结束: {}", e);
-                    host.emit_job_state(
-                        &ctx,
-                        "failed",
-                        None,
-                        None,
-                        Some(to_error_payload(e)),
-                    );
+                    host.emit_job_state(&ctx, "failed", None, None, Some(to_error_payload(e)));
                 }
                 Err(ref e) => {
                     log::error!("任务失败: {}", e);
-                    host.emit_job_state(
-                        &ctx,
-                        "failed",
-                        None,
-                        None,
-                        Some(to_error_payload(e)),
-                    );
+                    host.emit_job_state(&ctx, "failed", None, None, Some(to_error_payload(e)));
                 }
             }
 
@@ -861,7 +848,11 @@ fn load_conversation_ids(items: &[Value]) -> Vec<String> {
         if status == "lost" {
             continue;
         }
-        if let Some(cid) = row.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(cid) = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             if seen.insert(cid.to_string()) {
                 out.push(cid.to_string());
             }
@@ -933,11 +924,17 @@ fn collect_empty_conversation_ids(items: &[Value]) -> Vec<String> {
     items
         .iter()
         .filter_map(|row| {
-            let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("normal");
+            let status = row
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("normal");
             if status == "lost" {
                 return None;
             }
-            let msg_count = row.get("messageCount").and_then(|v| v.as_i64()).unwrap_or(-1);
+            let msg_count = row
+                .get("messageCount")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(-1);
             if msg_count != 0 {
                 return None;
             }

@@ -9,10 +9,10 @@
 use std::sync::atomic::Ordering;
 
 use crate::browser_info;
-use crate::str_err::ToStringErr;
 use crate::protocol::{
     has_batchexecute_session_error, parse_batchexecute_response, ProtocolError, GEMINI_BASE,
 };
+use crate::str_err::ToStringErr;
 
 use super::GeminiExporter;
 
