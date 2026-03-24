@@ -164,6 +164,23 @@ pub fn sanitize_generation_placeholder_text(text: &str, has_attachments: bool) -
 }
 
 // ============================================================================
+// Citation 标记清理
+// ============================================================================
+
+fn cite_marker_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[cite_start\]|\[cite:\s*[\d,\s]+\]").unwrap())
+}
+
+/// 去除 Gemini Deep Research 回复中的 `[cite_start]` 和 `[cite: N, M, ...]` 标记。
+pub fn strip_citation_markers(text: &str) -> String {
+    if !text.contains("[cite") {
+        return text.to_string();
+    }
+    cite_marker_re().replace_all(text, "").to_string()
+}
+
+// ============================================================================
 // 媒体描述项工具
 // ============================================================================
 
@@ -793,6 +810,9 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
             !result.assistant.files.is_empty(),
         );
 
+        // Strip citation markers ([cite_start], [cite: N, ...])
+        result.assistant.text = strip_citation_markers(&result.assistant.text);
+
         // Generated media (music/video from ai_data[12])
         let (gen_files, music_meta, gen_meta) = extract_generated_media(ai);
         if !gen_files.is_empty() {
@@ -959,6 +979,25 @@ mod tests {
         // No attachments → no change
         let result2 = sanitize_generation_placeholder_text(text, false);
         assert_eq!(result2, text);
+    }
+
+    #[test]
+    fn test_strip_citation_markers() {
+        // 基本清理
+        let text = "[cite_start]这是一段话 [cite: 1451]。";
+        assert_eq!(strip_citation_markers(text), "这是一段话 。");
+
+        // 多编号
+        let text2 = "[cite_start]引用多个来源 [cite: 1520, 1521, 1524]。";
+        assert_eq!(strip_citation_markers(text2), "引用多个来源 。");
+
+        // 无标记 → 原样返回
+        let plain = "普通文本没有引用标记";
+        assert_eq!(strip_citation_markers(plain), plain);
+
+        // 混合段落
+        let mixed = "[cite_start]段落A [cite: 100]\n\n[cite_start]段落B [cite: 200, 300]。";
+        assert_eq!(strip_citation_markers(mixed), "段落A \n\n段落B 。");
     }
 
     #[test]
