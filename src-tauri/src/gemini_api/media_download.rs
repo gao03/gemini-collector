@@ -10,7 +10,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::str_err::ToStringErr;
-
 use reqwest::header;
 use url::Url;
 
@@ -114,9 +113,7 @@ impl GeminiExporter {
                 }
             }
 
-            self.before_request("media_http_get")
-                .await
-                .str_err()?;
+            self.before_request("media_http_get").await?;
 
             let resp = no_redirect_client
                 .get(&current_url)
@@ -127,7 +124,6 @@ impl GeminiExporter {
             let resp = match resp {
                 Ok(r) => r,
                 Err(e) => {
-                    self.mark_request_failure();
                     let fields = media_log_fields(
                         Some(&current_url),
                         media_type,
@@ -151,7 +147,6 @@ impl GeminiExporter {
                     .and_then(|v| v.to_str().ok());
                 match location {
                     Some(loc) => {
-                        self.mark_request_success();
                         // 相对 URL 拼接
                         current_url = match Url::parse(&current_url) {
                             Ok(base) => base.join(loc).map(|u| u.to_string()).unwrap_or_else(|_| loc.to_string()),
@@ -160,7 +155,6 @@ impl GeminiExporter {
                         continue;
                     }
                     None => {
-                        self.mark_request_failure();
                         log::warn!(
                             "[media-fail] 重定向缺少 location | media={} domain={}",
                             fields.media, fields.domain
@@ -171,12 +165,10 @@ impl GeminiExporter {
             }
 
             if status.is_success() {
-                self.mark_request_success();
                 let bytes = resp.bytes().await.str_err()?;
                 return Ok(Some(bytes.to_vec()));
             }
 
-            self.mark_request_failure();
             log::warn!(
                 "[media-fail] 非200状态码={} | media={} domain={}",
                 status.as_u16(),
@@ -186,7 +178,6 @@ impl GeminiExporter {
             return Ok(None);
         }
 
-        self.mark_request_failure();
         let fields = media_log_fields(Some(url), media_type, media_hint);
         log::warn!(
             "[media-fail] 重定向次数超限 | media={} domain={}",
@@ -245,8 +236,9 @@ impl GeminiExporter {
                         break;
                     }
                     Ok(None) => continue,
-                    Err(_) => {
-                        // 退避上限等致命错误
+                    Err(e) => {
+                        // 用户取消等致命错误
+                        log::warn!("[media] 致命错误，中止批量下载: {}", e);
                         return failed_items;
                     }
                 }

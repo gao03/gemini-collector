@@ -15,8 +15,8 @@ pub const REQUEST_DELAY: f64 = 0.30;
 pub const REQUEST_JITTER_MIN: f64 = 0.00;
 pub const REQUEST_JITTER_MAX: f64 = 0.30;
 pub const REQUEST_JITTER_MODE: f64 = 0.14;
-pub const REQUEST_BACKOFF_MAX_SECONDS: f64 = 120.0;
-pub const REQUEST_BACKOFF_LIMIT_FAILURES: u32 = 10;
+/// batchexecute 失败后重试前的暂停秒数
+pub const REQUEST_RETRY_PAUSE_SECONDS: f64 = 2.0;
 
 /// 浏览器 User-Agent（从本地 Chrome 检测，失败时用 fallback）。
 /// 保留为函数调用的 wrapper，方便旧代码引用。
@@ -34,8 +34,6 @@ pub fn browser_accept_language() -> &'static str {
 // ============================================================================
 #[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {
-    #[error("请求连续失败触发最终退避兜底")]
-    RequestBackoffLimitReached,
     #[error("HTTP 200 但响应数据为空（session/cookie 已过期）")]
     SessionExpired,
 }
@@ -189,20 +187,6 @@ pub fn extract_chat_latest_update(chat_item: &serde_json::Value) -> Option<i64> 
         return None;
     }
     inner[0].as_i64()
-}
-
-/// 计算退避等待秒数
-pub fn request_backoff_seconds(consecutive_failures: u32) -> f64 {
-    if consecutive_failures < 3 {
-        return 0.0;
-    }
-    if consecutive_failures < 6 {
-        return (2_u64.pow(consecutive_failures - 3)).min(4) as f64;
-    }
-    if consecutive_failures < 9 {
-        return (8 * 2_u64.pow(consecutive_failures - 6)).min(32) as f64;
-    }
-    (60.0 * 2_f64.powi((consecutive_failures - 9) as i32)).min(REQUEST_BACKOFF_MAX_SECONDS)
 }
 
 // ============================================================================
@@ -376,15 +360,6 @@ mod tests {
     fn test_iso_to_epoch_seconds() {
         let ts = iso_to_epoch_seconds("2023-11-14T22:13:20Z");
         assert_eq!(ts, Some(1700000000));
-    }
-
-    #[test]
-    fn test_request_backoff_seconds() {
-        assert_eq!(request_backoff_seconds(0), 0.0);
-        assert_eq!(request_backoff_seconds(2), 0.0);
-        assert_eq!(request_backoff_seconds(3), 1.0);
-        assert_eq!(request_backoff_seconds(5), 4.0);
-        assert!(request_backoff_seconds(12) <= REQUEST_BACKOFF_MAX_SECONDS);
     }
 
     #[test]

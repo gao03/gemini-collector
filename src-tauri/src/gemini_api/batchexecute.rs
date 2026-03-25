@@ -5,13 +5,14 @@
 //! - POST application/x-www-form-urlencoded
 //! - 响应分发到指定 rpcid
 //! - session 过期检测
+//! - 非 session 错误自动重试一次
 
 use std::sync::atomic::Ordering;
 
 use crate::browser_info;
-use crate::str_err::ToStringErr;
 use crate::protocol::{
-    has_batchexecute_session_error, parse_batchexecute_response, ProtocolError, GEMINI_BASE,
+    has_batchexecute_session_error, parse_batchexecute_response, ProtocolError,
+    REQUEST_RETRY_PAUSE_SECONDS, GEMINI_BASE,
 };
 
 use super::GeminiExporter;
@@ -25,11 +26,41 @@ impl GeminiExporter {
 
     /// 发送 batchexecute 请求，返回指定 rpcid 的解析数据。
     ///
+    /// 非 session 错误会自动暂停后重试一次。
+    ///
     /// # Arguments
     /// - `rpcid`: 目标 RPC 标识（如 "MaZiqc"、"hNvQHb"）
     /// - `payload_json`: JSON 序列化后的 payload 字符串
     /// - `source_path`: 来源路径（用于 source-path 参数，可为空）
     pub async fn batchexecute(
+        &self,
+        rpcid: &str,
+        payload_json: &str,
+        source_path: &str,
+    ) -> Result<serde_json::Value, String> {
+        match self.batchexecute_once(rpcid, payload_json, source_path).await {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                // session 过期不在此层重试，交给上层 run_with_retry 重建 exporter
+                if e.contains("HTTP 200 但响应数据为空") {
+                    return Err(e);
+                }
+                // 用户取消不重试
+                if e.contains("用户取消") {
+                    return Err(e);
+                }
+                log::warn!("[batchexecute] 失败，{}s 后重试一次: {}", REQUEST_RETRY_PAUSE_SECONDS, e);
+                tokio::time::sleep(std::time::Duration::from_secs_f64(
+                    REQUEST_RETRY_PAUSE_SECONDS,
+                ))
+                .await;
+                self.batchexecute_once(rpcid, payload_json, source_path).await
+            }
+        }
+    }
+
+    /// 发送单次 batchexecute 请求（不含重试逻辑）。
+    async fn batchexecute_once(
         &self,
         rpcid: &str,
         payload_json: &str,
@@ -80,8 +111,7 @@ impl GeminiExporter {
 
         // 执行前等待
         self.before_request(&format!("batchexecute:{}", rpcid))
-            .await
-            .str_err()?;
+            .await?;
 
         // 发送 POST 请求
         let resp = self
@@ -106,18 +136,7 @@ impl GeminiExporter {
             )
             .send()
             .await
-            .map_err(|e| {
-                // 网络错误时也需要在调用方标记失败
-                format!("batchexecute 网络请求失败: {}", e)
-            });
-
-        let resp = match resp {
-            Ok(r) => r,
-            Err(e) => {
-                self.mark_request_failure();
-                return Err(e);
-            }
-        };
+            .map_err(|e| format!("batchexecute 网络请求失败: {}", e))?;
 
         let status = resp.status();
         let resp_text = resp
@@ -126,7 +145,6 @@ impl GeminiExporter {
             .map_err(|e| format!("读取 batchexecute 响应失败: {}", e))?;
 
         if !status.is_success() {
-            self.mark_request_failure();
             let preview: String = resp_text.chars().take(500).collect();
             log::debug!("HTTP {} 响应内容: {}", status.as_u16(), preview);
             return Err(format!("batchexecute 失败: HTTP {}", status.as_u16()));
@@ -135,13 +153,11 @@ impl GeminiExporter {
         let results = parse_batchexecute_response(&resp_text);
         for (rid, data) in &results {
             if rid == rpcid {
-                self.mark_request_success();
                 return Ok(data.clone());
             }
         }
 
         // 未找到目标 rpcid
-        self.mark_request_failure();
         if has_batchexecute_session_error(&resp_text, rpcid) {
             return Err(format!(
                 "{}: rpcid={}",

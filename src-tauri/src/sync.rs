@@ -76,7 +76,6 @@ impl GeminiExporter {
 
         std::fs::create_dir_all(&conv_dir).str_err()?;
         std::fs::create_dir_all(&media_dir).str_err()?;
-        self.set_request_state_scope(account_dir.clone());
 
         log::info!("仅同步列表到: {}", account_dir.display());
 
@@ -118,12 +117,7 @@ impl GeminiExporter {
         if resume_cursor.is_some() {
             log::info!("检测到上次列表同步中断，继续从 cursor 拉取...");
         } else {
-            let failures = self.request_consecutive_failures.load(std::sync::atomic::Ordering::Relaxed);
-            if failures > 0 {
-                log::info!("检测到列表请求连续失败，按失败计数从第一页重试...");
-            } else {
-                log::info!("从第一页开始拉取列表...");
-            }
+            log::info!("从第一页开始拉取列表...");
             fetched_order.clear();
             fetched_seen.clear();
         }
@@ -220,7 +214,6 @@ impl GeminiExporter {
                 &conv_index,
                 &existing_index,
                 stop_early,
-                self,
             )?;
 
             match next_cursor {
@@ -243,7 +236,6 @@ impl GeminiExporter {
             &conv_index,
             &existing_index,
             stop_early,
-            self,
         )?;
 
         if stop_early {
@@ -277,7 +269,6 @@ fn persist_list_state(
     conv_index: &HashMap<String, Value>,
     existing_index: &HashMap<String, Value>,
     stopped_early: bool,
-    exporter: &GeminiExporter,
 ) -> Result<usize, String> {
     let now_iso = chrono::Utc::now().to_rfc3339();
     let remote_count = fetched_order.len();
@@ -332,7 +323,6 @@ fn persist_list_state(
             "version": 1,
             "accountId": account_id,
             "updatedAt": now_iso,
-            "requestState": exporter.current_request_state(),
             "concurrency": 1,
             "fullSync": {
                 "phase": phase,
@@ -544,7 +534,6 @@ impl GeminiExporter {
 
         std::fs::create_dir_all(&conv_dir).str_err()?;
         std::fs::create_dir_all(&media_dir).str_err()?;
-        self.set_request_state_scope(account_dir.clone());
 
         let bare_id = crate::protocol::strip_c_prefix(conversation_id);
         let conv_id = crate::protocol::ensure_c_prefix(conversation_id);
@@ -769,7 +758,6 @@ impl GeminiExporter {
         let mut state = storage::load_sync_state(&account_dir);
         let state_obj = state.as_object_mut().unwrap();
         state_obj.insert("updatedAt".into(), json!(now_iso));
-        state_obj.insert("requestState".into(), self.current_request_state());
         // 移除已完成的 pending entry
         if let Some(pending) = state_obj.get_mut("pendingConversations").and_then(|v| v.as_array_mut()) {
             pending.retain(|item| {

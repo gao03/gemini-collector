@@ -113,7 +113,6 @@ impl GeminiExporter {
                 &url,
                 &params,
                 6,
-                false, // init_auth 不计入业务请求统计
                 &navigate_headers,
             )
             .await?;
@@ -204,8 +203,7 @@ impl GeminiExporter {
                     &format!("{}/app", GEMINI_BASE),
                     &params,
                     1,
-                    false,
-                    &[], // resolve_authuser probe 不需要额外导航 headers
+                    &[],
                 )
                 .await
             {

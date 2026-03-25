@@ -24,7 +24,7 @@ use crate::gemini_api::GeminiExporter;
 
 const WORKER_EVENT_JOB_STATE: &str = "worker://job_state";
 
-const MAX_SESSION_RETRIES: u32 = 3;
+const MAX_SESSION_RETRIES: u32 = 1;
 
 // ============================================================================
 // 公开类型
@@ -249,8 +249,10 @@ impl WorkerHost {
         Ok(arc_exporter)
     }
 
-    /// 执行函数，遇到 SessionExpired 时刷新 session 重试
-    async fn run_with_session_retry<F, Fut, T>(
+    /// 执行函数，失败时重建 exporter 重试一次。
+    ///
+    /// 流程：执行 → 失败 → 重建 exporter → 重试 → 仍失败 → 放弃。
+    async fn run_with_retry<F, Fut, T>(
         self: &Arc<Self>,
         account_id: &str,
         mut make_fut: F,
@@ -265,9 +267,12 @@ impl WorkerHost {
             match make_fut(exporter.clone()).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
-                    if is_session_expired_error(&e) && attempt < MAX_SESSION_RETRIES {
+                    if is_cancelled_error(&e) {
+                        return Err(e);
+                    }
+                    if attempt < MAX_SESSION_RETRIES {
                         log::warn!(
-                            "第 {} 次 session 过期，正在重建: {}",
+                            "任务失败 (attempt {})，重建 exporter 重试: {}",
                             attempt + 1,
                             e
                         );
@@ -327,7 +332,7 @@ impl WorkerHost {
         let output_dir = self.output_dir.clone();
         let account_id = ctx.account_id.clone();
 
-        self.run_with_session_retry(&account_id, |exporter| {
+        self.run_with_retry(&account_id, |exporter| {
             let output_dir = output_dir.clone();
             let cancel = cancel.clone();
             async move {
@@ -356,7 +361,7 @@ impl WorkerHost {
         let output_dir = self.output_dir.clone();
         let account_id = ctx.account_id.clone();
 
-        self.run_with_session_retry(&account_id, |exporter| {
+        self.run_with_retry(&account_id, |exporter| {
             let output_dir = output_dir.clone();
             let cancel = cancel.clone();
             let cid = conversation_id.clone();
@@ -530,16 +535,6 @@ impl WorkerHost {
                     if cancel.is_cancelled() || is_cancelled_error(&e) {
                         return Err(e);
                     }
-                    if is_backoff_limit_error(&e) {
-                        self.emit_job_state(
-                            &sub_ctx,
-                            "failed",
-                            Some(phase),
-                            Some(json!({"current": idx + 1, "total": total})),
-                            Some(to_error_payload(&e)),
-                        );
-                        return Err(e);
-                    }
                     self.emit_job_state(
                         &sub_ctx,
                         "failed",
@@ -684,16 +679,6 @@ impl WorkerHost {
                     log::warn!("任务被用户取消: {}", e);
                     host.emit_job_state(&ctx, "cancelled", None, None, None);
                 }
-                Err(ref e) if is_backoff_limit_error(e) => {
-                    log::warn!("任务因退避兜底提前结束: {}", e);
-                    host.emit_job_state(
-                        &ctx,
-                        "failed",
-                        None,
-                        None,
-                        Some(to_error_payload(e)),
-                    );
-                }
                 Err(ref e) => {
                     log::error!("任务失败: {}", e);
                     host.emit_job_state(
@@ -800,34 +785,16 @@ fn merge_batch_result(
     }
 }
 
-fn is_session_expired_error(e: &str) -> bool {
-    // ProtocolError::SessionExpired → "HTTP 200 但响应数据为空（session/cookie 已过期）"
-    e.contains("HTTP 200 但响应数据为空")
-}
-
-fn is_backoff_limit_error(e: &str) -> bool {
-    // ProtocolError::RequestBackoffLimitReached → "请求连续失败触发最终退避兜底"
-    e.contains("请求连续失败")
-}
-
 fn is_cancelled_error(e: &str) -> bool {
     e.contains("用户取消") || e.contains("cancelled")
 }
 
 fn to_error_payload(e: &str) -> Value {
-    if is_backoff_limit_error(e) {
-        json!({
-            "code": "REQUEST_BACKOFF_LIMIT",
-            "message": e,
-            "retryable": false,
-        })
-    } else {
-        json!({
-            "code": "WORKER_ERROR",
-            "message": e,
-            "retryable": false,
-        })
-    }
+    json!({
+        "code": "WORKER_ERROR",
+        "message": e,
+        "retryable": false,
+    })
 }
 
 /// 读取 conversations.json 的 items

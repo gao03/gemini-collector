@@ -10,10 +10,8 @@ pub mod http_client;
 pub mod media_download;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 
 /// 媒体下载专用 Cookie 名称列表
 pub const GOOGLE_MEDIA_COOKIE_NAMES: &[&str] = &[
@@ -63,14 +61,6 @@ pub struct GeminiExporter {
     pub reqid: AtomicU32,
     /// 是否已发出过第一个请求（用于决定是否加延迟）
     pub request_started: AtomicBool,
-    /// 连续失败计数
-    pub request_consecutive_failures: AtomicU32,
-    /// 退避上限探测是否已消耗
-    pub limit_probe_consumed: AtomicBool,
-    /// 上次延迟秒数（存储 f64::to_bits()）
-    pub last_delay_sec: AtomicU64,
-    /// 请求状态持久化的账号目录
-    pub request_state_account_dir: ArcSwap<Option<PathBuf>>,
     /// 取消信号
     pub cancelled: Arc<AtomicBool>,
 }
@@ -100,10 +90,6 @@ impl GeminiExporter {
             fsid: None,
             reqid: AtomicU32::new(100000),
             request_started: AtomicBool::new(false),
-            request_consecutive_failures: AtomicU32::new(0),
-            limit_probe_consumed: AtomicBool::new(false),
-            last_delay_sec: AtomicU64::new(0f64.to_bits()),
-            request_state_account_dir: ArcSwap::new(Arc::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
