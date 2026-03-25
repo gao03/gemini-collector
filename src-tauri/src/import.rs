@@ -50,13 +50,22 @@ fn merge_conversations_index(src_dir: &Path, target_dir: &Path) -> Result<(), St
             .and_then(|v| v.get("items").and_then(|a| a.as_array()).cloned())
         {
             for item in src_items {
-                let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if id.is_empty() { continue; }
-                if let Some(pos) = existing_items.iter().position(|e| {
-                    e.get("id").and_then(|v| v.as_str()) == Some(id.as_str())
-                }) {
+                let id = item
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if id.is_empty() {
+                    continue;
+                }
+                if let Some(pos) = existing_items
+                    .iter()
+                    .position(|e| e.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+                {
                     let existing_updated = existing_items[pos]
-                        .get("updatedAt").and_then(|v| v.as_str()).unwrap_or("");
+                        .get("updatedAt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let src_updated = item.get("updatedAt").and_then(|v| v.as_str()).unwrap_or("");
                     if src_updated > existing_updated {
                         existing_items[pos] = item;
@@ -69,8 +78,11 @@ fn merge_conversations_index(src_dir: &Path, target_dir: &Path) -> Result<(), St
     }
 
     let out = serde_json::json!({ "items": existing_items });
-    std::fs::write(&target_conv_file, serde_json::to_string_pretty(&out).str_err()?)
-        .str_err()
+    std::fs::write(
+        &target_conv_file,
+        serde_json::to_string_pretty(&out).str_err()?,
+    )
+    .str_err()
 }
 
 fn merge_jsonl(existing_path: &Path, src_path: &Path) -> Result<(), String> {
@@ -79,10 +91,18 @@ fn merge_jsonl(existing_path: &Path, src_path: &Path) -> Result<(), String> {
         let mut msgs = Vec::new();
         for line in raw.lines() {
             let s = line.trim();
-            if s.is_empty() { continue; }
-            let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) else { continue; };
+            if s.is_empty() {
+                continue;
+            }
+            let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) else {
+                continue;
+            };
             match obj.get("type").and_then(|v| v.as_str()) {
-                Some("meta") => { if meta.is_none() { meta = Some(obj); } }
+                Some("meta") => {
+                    if meta.is_none() {
+                        meta = Some(obj);
+                    }
+                }
                 Some("message") => msgs.push(obj),
                 _ => {}
             }
@@ -95,28 +115,49 @@ fn merge_jsonl(existing_path: &Path, src_path: &Path) -> Result<(), String> {
     let (existing_meta, existing_msgs) = parse(&existing_raw);
     let (src_meta, src_msgs) = parse(&src_raw);
 
-    let existing_updated = existing_meta.as_ref()
-        .and_then(|m| m.get("updatedAt").and_then(|v| v.as_str())).unwrap_or("");
-    let src_updated = src_meta.as_ref()
-        .and_then(|m| m.get("updatedAt").and_then(|v| v.as_str())).unwrap_or("");
+    let existing_updated = existing_meta
+        .as_ref()
+        .and_then(|m| m.get("updatedAt").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let src_updated = src_meta
+        .as_ref()
+        .and_then(|m| m.get("updatedAt").and_then(|v| v.as_str()))
+        .unwrap_or("");
     let src_is_newer = src_updated > existing_updated;
 
-    let winner_meta = if src_is_newer { src_meta } else { existing_meta };
+    let winner_meta = if src_is_newer {
+        src_meta
+    } else {
+        existing_meta
+    };
     let winner_meta = winner_meta.unwrap_or_else(|| serde_json::json!({"type": "meta"}));
 
-    let mut msg_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut msg_map: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     let (loser_msgs, winner_msgs) = if src_is_newer {
         (&existing_msgs, &src_msgs)
     } else {
         (&src_msgs, &existing_msgs)
     };
     for msg in loser_msgs {
-        let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if !id.is_empty() { msg_map.insert(id, msg.clone()); }
+        let id = msg
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !id.is_empty() {
+            msg_map.insert(id, msg.clone());
+        }
     }
     for msg in winner_msgs {
-        let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if !id.is_empty() { msg_map.insert(id, msg.clone()); }
+        let id = msg
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !id.is_empty() {
+            msg_map.insert(id, msg.clone());
+        }
     }
 
     let mut merged: Vec<serde_json::Value> = msg_map.into_values().collect();
@@ -153,8 +194,12 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
         for entry in std::fs::read_dir(&src_conv_dir).str_err()? {
             let entry = entry.str_err()?;
             let path = entry.path();
-            if !entry.file_type().str_err()?.is_file() { continue; }
-            if !storage::is_jsonl_file(&path) { continue; }
+            if !entry.file_type().str_err()?.is_file() {
+                continue;
+            }
+            if !storage::is_jsonl_file(&path) {
+                continue;
+            }
             let target_path = target_conv_dir.join(path.file_name().unwrap());
             if target_path.exists() {
                 merge_jsonl(&target_path, &path)?;
@@ -169,7 +214,9 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
     if src_media_dir.exists() {
         for entry in std::fs::read_dir(&src_media_dir).str_err()? {
             let entry = entry.str_err()?;
-            if !entry.file_type().str_err()?.is_file() { continue; }
+            if !entry.file_type().str_err()?.is_file() {
+                continue;
+            }
             let target_path = target_media_dir.join(entry.file_name());
             if target_path.exists() {
                 skipped_media += 1;
@@ -191,11 +238,16 @@ fn do_import(src_dir: &Path, target_dir: &Path) -> Result<String, String> {
     .str_err()
 }
 
-fn import_account_zip_impl(data_dir: &Path, account_id: &str, zip_path: &Path) -> Result<String, String> {
+fn import_account_zip_impl(
+    data_dir: &Path,
+    account_id: &str,
+    zip_path: &Path,
+) -> Result<String, String> {
     use std::io::Read;
 
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开 ZIP 失败: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取 ZIP 格式失败: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("读取 ZIP 格式失败: {}", e))?;
 
     let tmp_id = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -249,8 +301,12 @@ fn import_account_zip_impl(data_dir: &Path, account_id: &str, zip_path: &Path) -
             if let Ok(raw) = std::fs::read_to_string(&meta_file) {
                 if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&raw) {
                     if let Some(obj) = meta.as_object_mut() {
-                        obj.insert("conversationCount".to_string(), serde_json::json!(conv_count));
-                        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                        obj.insert(
+                            "conversationCount".to_string(),
+                            serde_json::json!(conv_count),
+                        );
+                        let now =
+                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
                         obj.insert("lastSyncAt".to_string(), serde_json::json!(now));
                         obj.insert("lastSyncResult".to_string(), serde_json::json!("success"));
                         if let Ok(serialized) = serde_json::to_string_pretty(&meta) {
@@ -285,7 +341,12 @@ pub async fn import_account_zip(
     .await
     .str_err()??;
 
-    let account_dir = app.path().app_data_dir().str_err()?.join("accounts").join(&account_id);
+    let account_dir = app
+        .path()
+        .app_data_dir()
+        .str_err()?
+        .join("accounts")
+        .join(&account_id);
     let conversations_dir = account_dir.join("conversations");
     if let Ok(index) = search::open_or_create_index(&account_dir) {
         let _ = search::index_all(&index, &account_dir, &conversations_dir);

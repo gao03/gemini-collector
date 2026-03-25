@@ -1,0 +1,146 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: 2.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: gemini-collector-macos-x64
+
+          - platform: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: gemini-collector-macos-arm64
+
+          - platform: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: gemini-collector-windows-x64.exe
+
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装前端依赖
+        run: npm install
+
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: 构建项目
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: 打包产物 (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
+          if [ -d "gemini-collector.app" ]; then
+            # 打包 .app bundle
+            tar -czf ${{ matrix.artifact_name }}.tar.gz gemini-collector.app
+            mv ${{ matrix.artifact_name }}.tar.gz $GITHUB_WORKSPACE/
+          else
+            echo "错误: 找不到 gemini-collector.app"
+            exit 1
+          fi
+
+      - name: 打包产物 (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/msi
+          $msiFile = Get-ChildItem -Filter "*.msi" | Select-Object -First 1
+          if ($msiFile) {
+            Compress-Archive -Path $msiFile.FullName -DestinationPath "$env:GITHUB_WORKSPACE/${{ matrix.artifact_name }}.zip"
+          } else {
+            Write-Error "错误: 找不到 .msi 文件"
+            exit 1
+          }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}.tar.gz
+            ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+  create-release:
+    name: Create Release
+    needs: build
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 创建 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 从 tag 或 input 获取版本号
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="${{ inputs.version }}"
+            TAG="v${VERSION}"
+            # 创建 tag（仅在手动触发时）
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" -m "Release ${VERSION}"
+            git push origin "${TAG}"
+          fi
+
+          # 创建 Release
+          gh release create "${TAG}" \
+            --title "Release ${VERSION}" \
+            --generate-notes \
+            artifacts/**/*.tar.gz \
+            artifacts/**/*.zip

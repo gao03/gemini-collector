@@ -50,6 +50,23 @@ pub struct GenMeta {
     pub prompt: Option<String>,
 }
 
+/// 深度研究文章
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepResearchArticle {
+    pub composite_id: String,
+    pub uuid: String,
+    pub title: String,
+    pub doc_uuid: String,
+    pub article_markdown: String,
+}
+
+/// 深度研究方案
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepResearchPlan {
+    pub title: String,
+    pub steps: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleContent {
     pub text: String,
@@ -64,6 +81,8 @@ pub struct AssistantContent {
     pub files: Vec<MediaFile>,
     pub music_meta: Option<MusicMeta>,
     pub gen_meta: Option<GenMeta>,
+    pub deep_research_plan: Option<DeepResearchPlan>,
+    pub deep_research_articles: Vec<DeepResearchArticle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -638,6 +657,155 @@ pub fn parse_media_item(item: &Value, role: &str) -> MediaFile {
     media
 }
 
+// ============================================================================
+// Deep Research 解析
+// ============================================================================
+
+/// 清理文本中的 Google 占位符链接
+fn remove_placeholder_links(text: &str) -> String {
+    let result = text.to_string();
+
+    // 移除包含占位符链接的整行
+    let lines: Vec<&str> = result.lines().collect();
+    let filtered_lines: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| {
+            !line.contains("googleusercontent.com/immersive_entry_chip") &&
+            !line.contains("googleusercontent.com/deep_research_confirmation_content")
+        })
+        .collect();
+
+    filtered_lines.join("\n")
+}
+
+/// 从 ai_data[12][8]['58'] 提取深度研究方案（最终完成后的方案）
+fn extract_deep_research_plan(ai_data: &Value) -> Option<DeepResearchPlan> {
+    // ai_data[12][8]['58'][1][4] 是研究方案
+    if !ai_data.is_array() || vlen(ai_data) <= 12 {
+        return None;
+    }
+
+    let field_12 = vget(ai_data, 12)?;
+    if !field_12.is_array() || vlen(field_12) <= 8 {
+        return None;
+    }
+
+    let field_8 = vget(field_12, 8)?;
+    if !field_8.is_object() {
+        return None;
+    }
+
+    let field_58 = field_8.get("58")?.as_array()?;
+    if field_58.len() < 2 {
+        return None;
+    }
+
+    // field_58[1][4] 是包含方案数据的数组
+    let field_58_1 = vget(&field_58[1], 4)?.as_array()?;
+    if field_58_1.len() < 3 {
+        return None;
+    }
+
+    // field_58_1[0] 是标题
+    let title = field_58_1[0].as_str()?.to_string();
+
+    // field_58_1[2] 是步骤数组（field_58_1[1] 是 null）
+    let steps_arr = field_58_1[2].as_array()?;
+
+    let mut steps_text = String::new();
+
+    for step in steps_arr.iter() {
+        if let Some(step_arr) = step.as_array() {
+            // 步骤结构: [null, null, null, null, null, [标题, 内容, 数字]]
+            if step_arr.len() > 5 {
+                if let Some(step_data) = step_arr[5].as_array() {
+                    if step_data.len() >= 2 {
+                        // step_data[0] 是步骤标题，step_data[1] 是详细内容
+                        if let (Some(step_title), Some(step_detail)) =
+                            (step_data[0].as_str(), step_data[1].as_str()) {
+                            if !steps_text.is_empty() {
+                                steps_text.push_str("\n\n");
+                            }
+                            steps_text.push_str(&format!("## {}\n\n{}", step_title, step_detail));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if steps_text.is_empty() {
+        return None;
+    }
+
+    Some(DeepResearchPlan {
+        title,
+        steps: remove_placeholder_links(&steps_text),
+    })
+}
+
+/// 从 ai_data[30] 提取深度研究文章
+fn extract_deep_research_articles(ai_data: &Value) -> Vec<DeepResearchArticle> {
+    let mut articles = Vec::new();
+
+    if !ai_data.is_array() || vlen(ai_data) <= 30 {
+        return articles;
+    }
+
+    // ai_data[30] 是深度研究文章列表
+    let entries = match vget(ai_data, 30) {
+        Some(v) if v.is_array() => v.as_array().unwrap(),
+        _ => return articles,
+    };
+
+    for entry in entries.iter() {
+        let entry_arr = match entry.as_array() {
+            Some(a) if a.len() >= 5 => a,
+            _ => continue,
+        };
+
+        // entry[0]: composite_id
+        // entry[1]: uuid
+        // entry[2]: title
+        // entry[3]: doc_uuid
+        // entry[4]: article_markdown
+        let composite_id = match entry_arr[0].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let uuid = match entry_arr[1].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let title = match entry_arr[2].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let doc_uuid = match entry_arr[3].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let article_markdown = match entry_arr[4].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        articles.push(DeepResearchArticle {
+            composite_id,
+            uuid,
+            title,
+            doc_uuid,
+            article_markdown: remove_placeholder_links(&article_markdown),
+        });
+    }
+
+    articles
+}
+
+// ============================================================================
+// Turn 解析
+// ============================================================================
+
 /// 解析单个对话轮次
 pub fn parse_turn(turn: &Value) -> ParsedTurn {
     let mut result = ParsedTurn {
@@ -655,6 +823,8 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
             files: Vec::new(),
             music_meta: None,
             gen_meta: None,
+            deep_research_plan: None,
+            deep_research_articles: Vec::new(),
         },
     };
 
@@ -838,6 +1008,10 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         if gen_meta.is_some() {
             result.assistant.gen_meta = gen_meta;
         }
+
+        // Deep Research 解析
+        result.assistant.deep_research_plan = extract_deep_research_plan(ai);
+        result.assistant.deep_research_articles = extract_deep_research_articles(ai);
     }
 
     result
@@ -1102,6 +1276,8 @@ mod tests {
                     ],
                     music_meta: None,
                     gen_meta: None,
+                    deep_research_plan: None,
+                    deep_research_articles: Vec::new(),
                 },
             },
             ParsedTurn {
@@ -1141,6 +1317,8 @@ mod tests {
                     ],
                     music_meta: None,
                     gen_meta: None,
+                    deep_research_plan: None,
+                    deep_research_articles: Vec::new(),
                 },
             },
         ];

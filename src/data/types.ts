@@ -9,6 +9,19 @@ export interface Attachment {
   downloadError?: string;
 }
 
+export interface DeepResearchArticle {
+  composite_id: string;
+  uuid: string;
+  title: string;
+  doc_uuid: string;
+  article_markdown: string;
+}
+
+export interface DeepResearchPlan {
+  title: string;
+  steps: string;
+}
+
 export interface ConvMessage {
   type: "message";
   id: string;
@@ -20,6 +33,8 @@ export interface ConvMessage {
   thinking?: string;   // only when role=="model" and thinking exists
   genMeta?: { model?: string; prompt?: string };  // AI generated media meta
   hidden?: boolean;    // action_card messages marked by backend
+  deep_research_articles?: DeepResearchArticle[];  // 深度研究文章
+  deep_research_plan?: DeepResearchPlan;  // 研究方案确认
 }
 
 export interface Conversation {

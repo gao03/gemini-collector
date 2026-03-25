@@ -55,9 +55,10 @@ macOS & Windows 原生应用 · 支持多账号 · 亮色 / 暗色主题
 **导出**
 - 支持按时间范围筛选（全部 / 最近 3 天 / 7 天 / 一个月）
 - 导出格式：
-  - 原始数据
+  - 原始数据（ZIP）
   - [Kelivo](https://github.com/Chevey339/kelivo)
   - [Kelivo](https://github.com/Chevey339/kelivo) 分包（将数据拆分为多个小包，解决 iOS 设备单次导入量有限的问题）
+  - **[Obsidian](https://obsidian.md/)** ⭐ 新增！导出为 Markdown 格式，支持 YAML Frontmatter、Wikilinks、Callouts 等特性（[查看详情](OBSIDIAN_EXPORT.md)）
 - 导出前预览文件数量与体积
 
 ---

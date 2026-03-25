@@ -289,7 +289,7 @@ function App() {
   const [importNotice, setImportNotice] = useState<{ title: string; lines: string[] } | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportTimeRange, setExportTimeRange] = useState<"all" | "3d" | "7d" | "30d">("all");
-  const [exportFormat, setExportFormat] = useState<"zip" | "kelivo" | "kelivo-split">("zip");
+  const [exportFormat, setExportFormat] = useState<"zip" | "kelivo" | "kelivo-split" | "obsidian">("zip");
   const [exportStats, setExportStats] = useState<AccountExportStats | null>(null);
   const [exportRangeBytesCache, setExportRangeBytesCache] = useState<Map<string, number>>(new Map());
   const [exportRangeBytesLoading, setExportRangeBytesLoading] = useState(false);
@@ -854,6 +854,18 @@ function App() {
         if (!result) throw new Error("导出失败：返回结果异常");
         try { await revealItemInDir(result.zipPath); } catch {}
         setExportNotice({ title: "导出完成", lines: [`文件: ${result.fileName}`, `大小: ${formatBytes(result.zipSizeBytes)}`, `路径: ${result.zipPath}`] });
+      } else if (exportFormat === "obsidian") {
+        const selectedOutput = await open({ directory: true, multiple: false, title: "选择 Obsidian 导出目录" });
+        if (!selectedOutput) return;
+        const outputDir = Array.isArray(selectedOutput) ? selectedOutput[0] : selectedOutput;
+        if (!outputDir || typeof outputDir !== "string") throw new Error("未选择有效导出目录");
+        const outputPath = `${outputDir}/Gemini Conversations`;
+        const stdout = await invoke<string>("export_account_obsidian", { accountId, outputPath, afterDate });
+        try { await revealItemInDir(outputPath); } catch {}
+        setExportNotice({
+          title: "导出完成",
+          lines: stdout.split("\n").filter(l => l.trim())
+        });
       } else {
         const selectedOutput = await open({ directory: true, multiple: false, title: "选择导出目录" });
         if (!selectedOutput) return;
@@ -1132,7 +1144,7 @@ function App() {
               {/* 右列：导出格式 */}
               <div style={{ flex: 1, background: theme.hover, borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted, marginBottom: 10, letterSpacing: 0.5 }}>导出格式</div>
-                {([ ["zip","原始"], ["kelivo","Kelivo"], ["kelivo-split","Kelivo（分包）"] ] as const).map(([val, label]) => (
+                {([ ["zip","原始"], ["kelivo","Kelivo"], ["kelivo-split","Kelivo（分包）"], ["obsidian","Obsidian"] ] as const).map(([val, label]) => (
                   <div key={val} onClick={() => setExportFormat(val)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", cursor: "pointer" }}>
                     <div style={{ width: 10, height: 10, borderRadius: 5, background: exportFormat === val ? "#0071e3" : "transparent", border: exportFormat === val ? "none" : `1.5px solid ${theme.textMuted}`, flexShrink: 0 }} />
                     <span style={{ fontSize: 13, color: theme.text }}>{label}</span>
