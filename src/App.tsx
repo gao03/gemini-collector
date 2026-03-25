@@ -1094,7 +1094,20 @@ function App() {
               setScreen("account-picker");
             }}
             authuser={currentAccount.authuser}
-            onClearConversation={() => setSelectedConversation(null)}
+            onClearConversation={async () => {
+              if (!currentAccount || !selectedId) return;
+              const accountId = currentAccount.id;
+              const convId = selectedId;
+              try {
+                await invoke("clear_conversation_data", { accountId, conversationId: convId });
+              } catch (e) {
+                console.error("清除对话数据失败:", e);
+                return;
+              }
+              setSelectedConversation(null);
+              // 重载 summaries 让侧边栏条数归零
+              await loadSummaries(accountId);
+            }}
           />
           <ChatView conversation={selectedConversation} mediaDir={mediaDir} mediaVersion={mediaVersion} scrollToMessageId={scrollToMessageId} onScrolledToMessage={handleScrolledToMessage} />
         </div>

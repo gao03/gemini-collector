@@ -102,13 +102,52 @@ fn delete_conversation(
     let account_dir = data_dir.join("accounts").join(&account_id);
     let bare_id = protocol::strip_c_prefix(&conversation_id);
 
-    // 删除 .jsonl 文件
-    let conv_file = account_dir.join("conversations").join(format!("{}.jsonl", bare_id));
+    // 1. 读取 JSONL 收集所有引用的 mediaId，然后删除 JSONL
+    let conv_file = account_dir
+        .join("conversations")
+        .join(format!("{}.jsonl", bare_id));
+    let mut media_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     if conv_file.exists() {
+        if let Ok(raw) = std::fs::read_to_string(&conv_file) {
+            for line in raw.lines() {
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                if let Ok(row) = serde_json::from_str::<serde_json::Value>(s) {
+                    if let Some(atts) = row.get("attachments").and_then(|v| v.as_array()) {
+                        for att in atts {
+                            if let Some(mid) = att.get("mediaId").and_then(|v| v.as_str()) {
+                                if !mid.is_empty() {
+                                    media_ids.insert(mid.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         std::fs::remove_file(&conv_file).str_err()?;
     }
 
-    // 从 conversations.json 的 items 中移除该条记录，并取得新数量
+    // 2. 删除该对话的媒体文件，并清理 media_manifest.json
+    if !media_ids.is_empty() {
+        let media_dir = account_dir.join("media");
+        for mid in &media_ids {
+            let media_path = media_dir.join(mid);
+            if media_path.exists() {
+                let _ = std::fs::remove_file(&media_path);
+            }
+        }
+        let manifest = storage::load_media_manifest(&account_dir);
+        let cleaned: std::collections::HashMap<String, String> = manifest
+            .into_iter()
+            .filter(|(_url, name)| !media_ids.contains(name))
+            .collect();
+        let _ = storage::save_media_manifest(&account_dir, &cleaned);
+    }
+
+    // 3. 从 conversations.json 移除该条记录，同步更新 totalCount
     let index_file = account_dir.join("conversations.json");
     let new_count: Option<usize> = if index_file.exists() {
         let raw = std::fs::read_to_string(&index_file).str_err()?;
@@ -118,6 +157,9 @@ fn delete_conversation(
                     item.get("id").and_then(|v| v.as_str()) != Some(bare_id.as_str())
                 });
                 let count = items.len();
+                if let Some(obj) = parsed.as_object_mut() {
+                    obj.insert("totalCount".to_string(), serde_json::json!(count));
+                }
                 let serialized = serde_json::to_string_pretty(&parsed).str_err()?;
                 std::fs::write(&index_file, serialized).str_err()?;
                 Some(count)
@@ -131,7 +173,7 @@ fn delete_conversation(
         None
     };
 
-    // 同步更新 meta.json 中的 conversationCount
+    // 4. 同步更新 meta.json 中的 conversationCount
     if let Some(count) = new_count {
         let meta_file = account_dir.join("meta.json");
         if meta_file.exists() {
@@ -146,7 +188,95 @@ fn delete_conversation(
         }
     }
 
-    // 清理搜索索引
+    // 5. 清理搜索索引
+    if let Ok(index) = search::open_or_create_index(&account_dir) {
+        let _ = search::remove_conversation(&index, &account_dir, &bare_id);
+    }
+
+    Ok(())
+}
+
+/// 清除单个对话的本地数据（JSONL + 媒体），保留列表条目但将计数归零。
+#[tauri::command]
+fn clear_conversation_data(
+    app: tauri::AppHandle,
+    account_id: String,
+    conversation_id: String,
+) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().str_err()?;
+    let account_dir = data_dir.join("accounts").join(&account_id);
+    let bare_id = protocol::strip_c_prefix(&conversation_id);
+
+    // 1. 读取 JSONL 收集 mediaId，然后删除
+    let conv_file = account_dir
+        .join("conversations")
+        .join(format!("{}.jsonl", bare_id));
+    let mut media_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if conv_file.exists() {
+        if let Ok(raw) = std::fs::read_to_string(&conv_file) {
+            for line in raw.lines() {
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                if let Ok(row) = serde_json::from_str::<serde_json::Value>(s) {
+                    if let Some(atts) = row.get("attachments").and_then(|v| v.as_array()) {
+                        for att in atts {
+                            if let Some(mid) = att.get("mediaId").and_then(|v| v.as_str()) {
+                                if !mid.is_empty() {
+                                    media_ids.insert(mid.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::fs::remove_file(&conv_file).str_err()?;
+    }
+
+    // 2. 删除媒体文件，清理 manifest
+    if !media_ids.is_empty() {
+        let media_dir = account_dir.join("media");
+        for mid in &media_ids {
+            let p = media_dir.join(mid);
+            if p.exists() {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+        let manifest = storage::load_media_manifest(&account_dir);
+        let cleaned: std::collections::HashMap<String, String> = manifest
+            .into_iter()
+            .filter(|(_url, name)| !media_ids.contains(name))
+            .collect();
+        let _ = storage::save_media_manifest(&account_dir, &cleaned);
+    }
+
+    // 3. conversations.json 中保留条目但将计数归零
+    let index_file = account_dir.join("conversations.json");
+    if index_file.exists() {
+        let raw = std::fs::read_to_string(&index_file).str_err()?;
+        if let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(items) = parsed.get_mut("items").and_then(|v| v.as_array_mut()) {
+                for item in items.iter_mut() {
+                    if item.get("id").and_then(|v| v.as_str()) == Some(bare_id.as_str()) {
+                        if let Some(obj) = item.as_object_mut() {
+                            obj.insert("messageCount".into(), serde_json::json!(0));
+                            obj.insert("imageCount".into(), serde_json::json!(0));
+                            obj.insert("videoCount".into(), serde_json::json!(0));
+                            obj.insert("hasMedia".into(), serde_json::json!(false));
+                            obj.insert("lastMessage".into(), serde_json::json!(""));
+                        }
+                        break;
+                    }
+                }
+                let serialized = serde_json::to_string_pretty(&parsed).str_err()?;
+                std::fs::write(&index_file, serialized).str_err()?;
+            }
+        }
+    }
+
+    // 4. 清理搜索索引
     if let Ok(index) = search::open_or_create_index(&account_dir) {
         let _ = search::remove_conversation(&index, &account_dir, &bare_id);
     }
@@ -1163,6 +1293,7 @@ pub fn run() {
             import::import_account_zip,
             clear_account_data,
             delete_conversation,
+            clear_conversation_data,
             load_conversation_summaries,
             get_account_media_dir,
             load_conversation_detail,
