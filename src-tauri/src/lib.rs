@@ -1290,6 +1290,7 @@ pub fn run() {
             export::export_account_zip,
             export::export_account_kelivo,
             export::export_account_kelivo_split,
+            export::export_account_obsidian,
             import::import_account_zip,
             clear_account_data,
             delete_conversation,

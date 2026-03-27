@@ -538,7 +538,7 @@ fn build_obsidian_content(
 
         // 模型信息（使用 highlight 语法强调）
         if let Some(model_name) = model {
-            content.push_str(&format!("%%\n==Model: {}==%%\n\n", model_name));
+            content.push_str(&format!("%%==Model: {}==%%\n\n", model_name));
         }
 
         // 思考过程（可折叠，使用 tip callout）
@@ -581,7 +581,7 @@ fn build_obsidian_content(
         if let Some(plan) = msg.get("deep_research_plan") {
             if !plan.is_null() {
                 if let Some(plan_title) = plan.get("title").and_then(|v| v.as_str()) {
-                    content.push_str("> [!info]- 🔍 研究方案\n");
+                    content.push_str("> [!info]- 🔍 思路\n");
                     content.push_str(&format!("> =={}==\n>\n", plan_title));
                     if let Some(steps) = plan.get("steps").and_then(|v| v.as_str()) {
                         for line in steps.lines() {
@@ -596,8 +596,10 @@ fn build_obsidian_content(
         // Deep Research Articles（使用 abstract callout，可折叠）
         if let Some(articles) = msg.get("deep_research_articles").and_then(|v| v.as_array()) {
             if !articles.is_empty() {
-                content.push_str("> [!abstract]- 📚 研究文章\n");
-                content.push_str(&format!("> 共 =={}== 篇文章\n\n", articles.len()));
+                if articles.len() > 1 {
+                    content.push_str("> [!abstract]- 📚 研究文章\n");
+                    content.push_str(&format!("> 共 =={}== 篇文章\n\n", articles.len()));
+                }
 
                 for (i, article) in articles.iter().enumerate() {
                     if let Some(article_title) = article.get("title").and_then(|v| v.as_str()) {

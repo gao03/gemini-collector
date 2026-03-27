@@ -670,12 +670,102 @@ fn remove_placeholder_links(text: &str) -> String {
     let filtered_lines: Vec<&str> = lines
         .into_iter()
         .filter(|line| {
-            !line.contains("googleusercontent.com/immersive_entry_chip") &&
-            !line.contains("googleusercontent.com/deep_research_confirmation_content")
+            let trimmed = line.trim();
+            // 过滤占位符链接
+            !trimmed.contains("googleusercontent.com/immersive_entry_chip") &&
+            !trimmed.contains("googleusercontent.com/deep_research_confirmation_content") &&
+            // 过滤以占位符 URL 开头的行
+            !trimmed.starts_with("http://googleusercontent.com/immersive_entry_chip") &&
+            !trimmed.starts_with("http://googleusercontent.com/deep_research_confirmation_content") &&
+            !trimmed.starts_with("https://googleusercontent.com/immersive_entry_chip") &&
+            !trimmed.starts_with("https://googleusercontent.com/deep_research_confirmation_content")
         })
         .collect();
 
-    filtered_lines.join("\n")
+    filtered_lines.join("\n").trim().to_string()
+}
+
+/// 从 ai_data[12][8]['56'] 提取研究方案确认消息（"这是我拟定的方案" 或 "我已经更新了方案"）
+fn extract_deep_research_plan_confirmation(ai_data: &Value) -> Option<DeepResearchPlan> {
+    if !ai_data.is_array() || vlen(ai_data) <= 12 {
+        return None;
+    }
+
+    let field_12 = vget(ai_data, 12)?;
+    if !field_12.is_array() || vlen(field_12) <= 8 {
+        return None;
+    }
+
+    let field_8 = vget(field_12, 8)?;
+    if !field_8.is_object() {
+        return None;
+    }
+
+    // 提取 "56" 字段（研究方案确认消息）
+    let field_56 = field_8.get("56")?.as_array()?;
+    if field_56.len() < 2 {
+        return None;
+    }
+
+    // field_56[0] 是标题
+    let title = field_56[0].as_str()?.to_string();
+
+    // field_56[1] 是步骤数组
+    // 格式: [[1, "研究网站", "(1) xxx\n(2) xxx\n..."], [2, "分析结果", "..."], [3, "生成报告", "..."]]
+    let steps_wrapper = field_56[1].as_array()?;
+    if steps_wrapper.is_empty() {
+        return None;
+    }
+
+    let mut steps_text = String::new();
+
+    for step in steps_wrapper.iter() {
+        if let Some(step_arr) = step.as_array() {
+            if step_arr.len() >= 3 {
+                // step_arr[0] 是步骤编号
+                // step_arr[1] 是步骤阶段标题（如 "研究网站"）
+                // step_arr[2] 是详细内容（如 "(1) xxx\n(2) xxx\n..."）
+                let phase_title = step_arr[1].as_str().unwrap_or("");
+                let content = step_arr[2].as_str().unwrap_or("");
+
+                if !phase_title.is_empty() || !content.is_empty() {
+                    if !steps_text.is_empty() {
+                        steps_text.push_str("\n\n");
+                    }
+
+                    // 添加阶段标题（如 "🔍 研究网站"）
+                    if !phase_title.is_empty() {
+                        steps_text.push_str(&format!("## 🔍 {}\n\n", phase_title));
+                    }
+
+                    // 添加详细内容，将单换行符替换为双换行符以便 Markdown 渲染
+                    if !content.is_empty() {
+                        let formatted_content = content
+                            .split('\n')
+                            .map(|line| line.trim())
+                            .filter(|line| {
+                                // 过滤空行和与阶段标题重复的行
+                                !line.is_empty() && *line != phase_title
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+                        if !formatted_content.is_empty() {
+                            steps_text.push_str(&formatted_content);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if steps_text.is_empty() {
+        return None;
+    }
+
+    Some(DeepResearchPlan {
+        title,
+        steps: remove_placeholder_links(&steps_text),
+    })
 }
 
 /// 从 ai_data[12][8]['58'] 提取深度研究方案（最终完成后的方案）
@@ -935,7 +1025,7 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         // assistant text from ai_data[1][0]
         if let Some(text_arr) = vget(ai, 1) {
             if let Some(text) = vstr(text_arr, 0) {
-                result.assistant.text = text.to_string();
+                result.assistant.text = remove_placeholder_links(text);
             }
         }
 
@@ -1010,7 +1100,14 @@ pub fn parse_turn(turn: &Value) -> ParsedTurn {
         }
 
         // Deep Research 解析
-        result.assistant.deep_research_plan = extract_deep_research_plan(ai);
+        // 优先尝试提取研究方案确认消息（"56" 字段，包含阶段信息）
+        if let Some(plan) = extract_deep_research_plan_confirmation(ai) {
+            result.assistant.deep_research_plan = Some(plan);
+        } else if let Some(plan) = extract_deep_research_plan(ai) {
+            // 如果没有找到 "56" 字段，尝试提取最终研究方案（"58" 字段）
+            result.assistant.deep_research_plan = Some(plan);
+        }
+
         result.assistant.deep_research_articles = extract_deep_research_articles(ai);
     }
 
